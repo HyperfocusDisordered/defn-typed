@@ -30,6 +30,21 @@
     [(map #(if (api/map-node? %) (api/map-node (mapcat identity (remove as? (pairs %)))) %) meta-nodes)
      (some #(when (api/map-node? %) (second (first (filter as? (pairs %))))) meta-nodes)]))
 
+(defn- entry-defaults!
+  "Mirrors defn-typed.core/entry-default-paths: reports every row (nested `[:map …]` rows included)
+   whose entry props carry `:default`, which belongs in the type's own props."
+  [finding! path props type]
+  (when (and props (api/map-node? props)
+             (some #(and (api/keyword-node? %) (= :default (api/sexpr %))) (take-nth 2 (:children props))))
+    (finding! props (str (apply str (interpose " " (map pr-str path)))
+                         " · put :default into the schema's props: [:int {:default v}]")))
+  (when (and (api/vector-node? type) (= :map (some-> (first (:children type)) api/sexpr)))
+    (doseq [row (rest (:children type))
+            :when (api/vector-node? row)
+            :let [[k a b] (:children row)]
+            :when (api/keyword-node? k)]
+      (entry-defaults! finding! (conj path (api/sexpr k)) (when b a) (or b a)))))
+
 (defn defn-typed [{:keys [node]}]
   (let [[fn-name & more] (rest (:children node))
         [doc more] (if (api/string-node? (first more)) [(first more) (rest more)] [nil more])
@@ -46,6 +61,10 @@
                      (finding! k "a key of the input map is a keyword"))
                    (when (and with-props? (not= 2 (count (:children v))))
                      (finding! v "a row with props is key [props schema]"))
+                   (when (api/keyword-node? k)
+                     (if with-props?
+                       (entry-defaults! finding! [(api/sexpr k)] (first (:children v)) (second (:children v)))
+                       (entry-defaults! finding! [(api/sexpr k)] nil v)))
                    (api/vector-node (cons k (if with-props? (:children v) [v]))))))
         ;; an input of the wrong shape is still analysed, and its vector rows still bind locals, so
         ;; only the shape is reported
