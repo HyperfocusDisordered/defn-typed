@@ -146,7 +146,7 @@ A real one, from the app this library was extracted from:
 )
 ```
 
-Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
+The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
 
 ## Syntax
 
@@ -217,6 +217,7 @@ The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/de
 project:
 
 ```sh
+mkdir -p .clj-kondo   # clj-kondo copies configs only into an existing config dir
 clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
 ```
 
