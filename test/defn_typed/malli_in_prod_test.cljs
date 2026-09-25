@@ -1,7 +1,7 @@
 (ns defn-typed.malli-in-prod-test
   "`:malli-in-prod` in cljs: violations reach the handler on a 0 ms timeout, redacted and deduped;
    the call's result never changes."
-  (:require [cljs.test :refer [deftest is testing async]]
+  (:require [cljs.test :refer [deftest is async]]
             [defn-typed.core :refer [defn-typed defmeta]]
             [defn-typed.malli-in-prod :as mp]))
 
