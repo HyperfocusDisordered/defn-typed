@@ -51,7 +51,11 @@ order, nothing else.
 } -> :int
 ```
 
-Same shape, and the signature also says what none of the four can: `discount` is 0 to 100.
+Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
+range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
+after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Uninstrumented code
+checks nothing, and cljs release builds contain no malli at all. clj-kondo checks keys and types
+(not the range) as you type, once the types are emitted — see Static checking.
 
 ## Forms
 
