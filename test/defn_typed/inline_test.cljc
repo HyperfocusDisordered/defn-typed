@@ -57,6 +57,18 @@
   (if (zero? n) 1 (* n (let [f fact-by-value] (f {:n (dec n)}))))
 )
 
+(defn-typed count-down {:n :int} -> :int
+  (if (pos? n) (recur {:n (dec n)}) n)
+)
+
+(defn-typed sum-down {:n :int :acc [:int {:default 0}]} -> :int
+  (if (pos? n) (recur {:n (dec n) :acc (+ acc n)}) acc)
+)
+
+(defn-typed nested-recur {:n :int} -> :any
+  (loop [i n acc []] (if (pos? i) (recur (dec i) (conj acc i)) acc))
+)
+
 (defn- literal-caller [] (padded {:a 1}))
 
 (deftest defaults-and-nil
@@ -84,6 +96,13 @@
   (testing "the body calls its own function by name, in call position and as a value"
     (is (= 120 (fact {:n 5})))
     (is (= 120 (fact-by-value {:n 5})))))
+
+(deftest recur-in-the-body
+  (testing "recur targets the function: it recurs with the map, defaults filled again"
+    (is (= 0 (count-down {:n 3})))
+    (is (= 6 (sum-down {:n 3}))))
+  (testing "a recur inside a nested loop targets the loop"
+    (is (= [3 2 1] (nested-recur {:n 3})))))
 
 (deftest literals-that-fall-back
   (testing "an unknown key or a missing required key compiles to the map call, with the map call's result"

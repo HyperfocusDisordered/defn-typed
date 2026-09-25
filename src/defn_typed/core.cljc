@@ -218,6 +218,22 @@
      (not-any? #(or (symbol? %) (seq? %)) (tree-seq coll? seq form))))
 
 #?(:clj
+   (defn- self-recur?
+     "Whether form holds a `recur` whose target is the enclosing function: one outside a nested
+      loop, fn or letfn binding, and outside a quote."
+     [form]
+     (cond
+       (= 'recur form) true
+       (seq? form) (let [head (when (symbol? (first form)) (symbol (name (first form))))]
+                     (cond
+                       ('#{loop loop* fn fn* quote} head) false
+                       (= 'letfn head) (boolean (some self-recur? (nnext form)))
+                       :else (boolean (some self-recur? form))))
+       (map? form) (boolean (some self-recur? (mapcat identity form)))
+       (coll? form) (boolean (some self-recur? form))
+       :else false)))
+
+#?(:clj
    (defn- default-slot?
      "Whether a row type form may carry `:default` in its own props: a props map holding it, or a
       symbol or call in the props slot (its value shows only when evaluated)."
@@ -420,8 +436,9 @@
                               (not (or (default-slot? type) (:optional row-props))) (assoc :required true))))
                         (filter vector? (rest in-schema))))
              locals (cond-> (mapv :local rows) whole (conj whole))
-             ;; clojure fns take at most 20 positional params: a larger table keeps its body in name
-             positional? (<= (count locals) 20)
+             ;; clojure fns take at most 20 positional params: a larger table keeps its body in name;
+             ;; so does a body whose recur targets the function (it recurs with the map)
+             positional? (and (<= (count locals) 20) (not-any? self-recur? body))
              m (gensym "m")
              bindings (if whole
                         [{:keys (mapv :binding rows) :as whole} `(with-defaults ~props ~m)]
