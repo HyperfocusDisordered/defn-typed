@@ -321,8 +321,8 @@ The switch:
   call is covered, `:refer`red ones included (the function's `:inline`).
 - **ClojureScript**: on in a release build (`:optimizations :advanced`). Calls through an alias
   (`c/order-total`), a qualified name, or inside the defining namespace are covered; a `:refer`red
-  call from another namespace stays the map call (clj-kondo and dev instrumentation still check
-  it). In the release JS such a call builds no map: `(c/order-total {:price p :qty 3})` came out
+  call from another namespace stays the map call and gets no literal check (clj-kondo and dev
+  instrumentation still check it). In the release JS such a call builds no map: `(c/order-total {:price p :qty 3})` came out
   as `quot(300 * p, 100)`.
 
 The switch is for release builds only. A rewritten call skips `<name>`, so instrumentation does
@@ -348,7 +348,8 @@ WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at le
 ```
 
 ClojureScript: literal checks and the rewrite run in release (`:advanced`) builds; in dev,
-clj-kondo and malli instrumentation cover the same calls.
+clj-kondo and malli instrumentation cover the same calls. A `:refer`red call from another
+namespace is neither checked nor rewritten.
 
 Not checked here: a value that is not data, a row schema that cannot be evaluated at compile time
 (in cljs, a schema with a symbol in it), a map that is not a literal. The value check runs only
