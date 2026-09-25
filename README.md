@@ -58,7 +58,7 @@ Same shape, and the signature also says what none of the four can: `discount` is
 The schemas are [malli](https://github.com/metosin/malli) schemas, stored as plain `:malli/schema`
 var metadata. They check calls only where a dev/test/REPL loader runs malli's instrumentation;
 a production build carries them as data and never loads malli. The example pairs run as tests
-(`check-var`, `deftests!`) and from an editor's after-edit hook.
+(`check-var`, `check-ns`, `deftests!`).
 
 Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
@@ -217,30 +217,15 @@ further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints
 arrow and the body as the `def` + `defn` above, with the row keys as locals, and reports the same
 shape errors as the macro; the `defmeta` hook lints the map as code.
 
-## Check API (`defn-typed.core`)
+## Running the examples
 
-| fn | returns / does |
-|---|---|
-| `(check-var #'f)` | `{:var sym :cases n :failures [{:i :in :expected :actual}]}`; a throwing case → `:actual [:thrown msg]` + `:thrown-data` |
-| `(check-vars vars)` / `(check-ns 'ns)` | `check-var` over the vars with cases (`check-ns` is a macro; in cljs pass a quoted literal) |
-| `(case-vars vars)` | the distinct vars with cases, sorted |
-| `(registered-vars 'ns)` | the vars a `defmeta` / `tests` registered in `ns` |
-| `(undefined-metas 'ns)` | names a `defmeta` declared but nothing defined (missing or misspelt function) |
-| `(forget-ns! 'ns)` | drops every case of `ns` (registered and attr-map); call right before reloading `ns` |
-| `(deftests! 'ns)` (clj) | defines one `clojure.test` test `<fn>-inout` per var of `ns` with cases |
-| `(test-ns! 'ns)` / `(test-var! #'f)` (clj) | runs `clojure.test` tests + cases under one report, prints one summary line |
-| `(malli-reasons (malli-fns) ex-data)` | `<key path> · <message> · got <value>` lines for a `:malli.core/invalid-input`/`-output` ex-data |
-| `*trace-cases*` | when true, `check-var` prints `inout-case <ns/fn> <i> <args>` before each case |
-| `(with-defaults schema m)` | `m` with each absent row's `:default` (from the row type's props) filled, nested `[:map …]` rows too |
-| `(tests #'f [[[args…] out] …])` | legacy: registers positional-args cases; `defmeta` is the form for one-argument functions |
-
-## After-edit hook
-
-An editor hook that runs after every save of a `.clj*` file can use the API against a live REPL:
-`(forget-ns! 'ns)`, reload `ns`, re-arm instrumentation, then `(check-ns 'ns)` and
-`(undefined-metas 'ns)`, printing one `OK <ns> · in/out N/N` line or only the failing cases, with
-`malli-reasons` naming the failing keys of an instrumentation rejection and `*trace-cases*` naming
-the case a blocked eval stopped in.
+- `(check-var #'f)` → `{:var sym :cases n :failures [{:i :in :expected :actual}]}`; a throwing
+  case → `:actual [:thrown msg]`.
+- `(check-ns 'ns)` → `check-var` over every function of `ns` that has examples.
+- `(deftests! 'ns)` (clj) → one `clojure.test` test `<fn>-inout` per such function, so
+  `clojure -M:test` runs them with the rest of the suite.
+- A function with several positional arguments registers its examples with
+  `(tests #'f [[[args…] out] …])`; `defmeta` pairs take one argument.
 
 ## Compared with `malli.experimental/defn`
 
