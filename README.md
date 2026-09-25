@@ -90,7 +90,6 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
   :qty      [:int {:min 1 :default 1}]
   :discount [:int {:min 0 :max 100 :default 0}]
 } -> :int
-
   (quot (* price qty (- 100 discount)) 100)
 )
 ```
@@ -110,7 +109,6 @@ The smallest one, a single input:
 (defn-typed fizzbuzz {
   :n :int
 } -> :string
-
   (cond (zero? (mod n 15)) "FizzBuzz"
         (zero? (mod n 3))  "Fizz"
         (zero? (mod n 5))  "Buzz"
@@ -135,7 +133,6 @@ A real one, from the app this library was extracted from:
   :url-token   [:maybe :string]
   :start-param [:maybe :string]
 } -> [:maybe :string]
-
   (or (not-empty url-token)
       (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param ""))))
 )
@@ -169,7 +166,6 @@ Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verb
     :price :int
     :qty   [:int {:default 1}]
   } -> [:map [:total :int]]
-
     (assoc row :total (* price qty))
   )
   ```
