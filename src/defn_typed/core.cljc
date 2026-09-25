@@ -311,6 +311,29 @@
        :else false)))
 
 #?(:clj
+   (defn- expanded
+     "form with every macro call in it expanded, as the compiler will expand it (clj macroexpand-1,
+      cljs the analyzer's), so a macro that produces a `recur` shows it; a quoted form stays as
+      written. form itself when an expansion throws: the compile reports that error."
+     [env form]
+     (try
+       (let [expand-1 (if (:ns env)
+                        (let [cljs-expand-1 @(requiring-resolve 'cljs.analyzer/macroexpand-1)] #(cljs-expand-1 env %))
+                        macroexpand-1)
+             walk (fn walk [f]
+                    (cond
+                      (seq? f) (let [e (loop [f f] (let [n (expand-1 f)] (if (identical? n f) f (recur n))))]
+                                 (cond (and (seq? e) (= 'quote (first e))) e
+                                       (seq? e) (doall (map walk e))
+                                       :else (walk e)))
+                      (map? f) (into {} (map (fn [[k v]] [(walk k) (walk v)])) f)
+                      (vector? f) (mapv walk f)
+                      (set? f) (set (map walk f))
+                      :else f))]
+         (walk form))
+       (catch Exception _ form))))
+
+#?(:clj
    (defn- default-slot?
      "Whether a row type form may carry `:default` in its own props: a props map holding it, or a
       symbol or call in the props slot (its value shows only when evaluated)."
@@ -554,7 +577,7 @@
                   (fail! (str (apply str (interpose " and " (map (comp pr-str :key) keys))) " both bind " local)))
               ;; clojure fns take at most 20 positional params: a larger table keeps its body in name;
               ;; so does a body whose recur targets the function (it recurs with the map)
-              positional? (and (<= (count locals) 20) (not-any? self-recur? body))
+              positional? (and (<= (count locals) 20) (not-any? #(self-recur? (expanded &env %)) body))
               m (gensym "m")
               bindings (if whole
                          [{:keys (mapv :binding rows) :as whole} `(with-defaults ~props ~m)]

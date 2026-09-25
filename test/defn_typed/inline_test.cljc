@@ -69,6 +69,17 @@
   (loop [i n acc []] (if (pos? i) (recur (dec i) (conj acc i)) acc))
 )
 
+#?(:clj
+   (defmacro again
+     "A recur written by a macro: the body's recur only shows once expanded."
+     [m]
+     `(recur ~m)))
+
+#?(:clj
+   (defn-typed count-down-by-macro {:n :int} -> :int
+     (if (pos? n) (again {:n (dec n)}) n)
+   ))
+
 (defn-typed closed-pair ^{:closed true} {:a :int :b [:int {:max 9 :default 1}]} -> :any
   [a b]
 )
@@ -120,6 +131,9 @@
   (testing "recur targets the function: it recurs with the map, defaults filled again"
     (is (= 0 (count-down {:n 3})))
     (is (= 6 (sum-down {:n 3}))))
+  #?(:clj
+     (testing "a recur written by a macro in the body targets the function too"
+       (is (= 0 (count-down-by-macro {:n 3})))))
   (testing "a recur inside a nested loop targets the loop"
     (is (= [3 2 1] (nested-recur {:n 3})))))
 
