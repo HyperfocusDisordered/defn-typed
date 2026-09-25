@@ -2,6 +2,31 @@
 
 A function's input/output contract and its examples, written next to the function.
 
+## Why
+
+Most languages give you one familiar shape for a typed function: name, inputs with their types,
+output type, body.
+
+```typescript
+function fizzbuzz({ n }: { n: number }): string { … }
+```
+
+Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
+ways to get there have an API no human wants to read next to their code.
+[malli](https://github.com/metosin/malli) already solves the hard part (schemas, validation,
+readable errors, instrumentation), so this library only changes how you write it down. What the
+function does, then example inputs and outputs, then the typed function: plain data, in that
+order, nothing else.
+
+```clojure
+(defn-typed fizzbuzz {
+  :n :int
+} -> :string
+  …)
+```
+
+## Forms
+
 - `defmeta` (above the function): the docstring and the `:inout-tests` — `[in out]` example pairs.
 - `defn-typed` (the function): a map input `{key schema …}`, an `->` output schema, then the body.
   Every row key is a local in the body, defaults already filled.
