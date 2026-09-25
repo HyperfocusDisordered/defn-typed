@@ -103,7 +103,8 @@
                           [(api/map-node [(api/keyword-node :malli/schema)
                                           (api/vector-node [(api/keyword-node :=>)
                                                             (api/vector-node [(api/keyword-node :cat) props])
-                                                            out-schema])])
+                                                            ;; no output schema (-> missing) is reported above; a nil node would abort the file's analysis
+                                                            (or out-schema (api/keyword-node :any))])])
                            (api/vector-node [m])
                            (api/list-node
                              (concat [(api/token-node 'let)
