@@ -1,0 +1,57 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  clj:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          cli: 1.12.4.1582
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ github.job }}-deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'shadow-cljs.edn') }}
+          restore-keys: ${{ github.job }}-deps-${{ runner.os }}-
+      - run: clojure -M:test
+
+  cljs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          cli: 1.12.4.1582
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ github.job }}-deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'shadow-cljs.edn') }}
+          restore-keys: ${{ github.job }}-deps-${{ runner.os }}-
+      - run: clojure -M:cljs compile test && node out/node-tests.js
+
+  clj-kondo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          clj-kondo: 2026.01.19
+      - run: clj-kondo --lint src test --fail-level error
