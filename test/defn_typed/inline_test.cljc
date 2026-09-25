@@ -3,7 +3,9 @@
    the map call (the switch off: dev, REPL, tests) or to the positional call (on: clj
    `-J-Ddefn-typed.inline=true`, cljs `:advanced`). CI runs this namespace both ways."
   (:require [clojure.test :refer [deftest is testing]]
-            [defn-typed.core :refer [defn-typed]]))
+            [defn-typed.core :refer [defn-typed]]
+            ;; the value check of a literal runs when malli is loaded, as a dev/test loader loads it
+            #?(:clj [malli.core])))
 
 (def inline?
   "Whether this build compiled with the switch on."
@@ -138,4 +140,9 @@
      (testing "a fitting literal, a non-constant value, and a map that is not a literal print nothing"
        (is (= "" (compile-warnings '(order-total {:price 100 :qty 2}))))
        (is (= "" (compile-warnings '(let [q 0] (order-total {:price 100 :qty q})))))
-       (is (= "" (compile-warnings '(let [m {:qty 0}] (order-total m))))))))
+       (is (= "" (compile-warnings '(let [m {:qty 0}] (order-total m))))))
+     (testing "malli not loaded (a server compiling from source): the key checks run, the value check does not load malli"
+       (with-redefs [find-ns (fn [sym] (when-not (= 'malli.core sym) (clojure.lang.Namespace/find sym)))]
+         (is (= "" (compile-warnings '(order-total {:price 100 :qty 0}))))
+         (is (re-find #"\(order-total …\) :price — missing required key\n$"
+                      (compile-warnings '(order-total {:qty 0}))))))))

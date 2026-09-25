@@ -342,9 +342,10 @@ WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at le
 ```
 
 Not checked here: a value that is not data, a row schema that cannot be evaluated at compile time
-(in cljs, a schema with a symbol in it), a map that is not a literal. The value check needs malli:
-dev compiles load it; a Clojure release with the switch on checks values only if malli is already
-loaded. Key checks always run.
+(in cljs, a schema with a symbol in it), a map that is not a literal. The value check runs only
+where malli is already loaded: the dev REPL/test loaders load it first, so the files they (re)load
+get value checks, and a Clojure server compiling from source never loads it, switch on or off (the
+ClojureScript compiler loads it). Key checks always run.
 
 ## Checks run in dev/test only
 

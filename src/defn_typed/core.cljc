@@ -262,11 +262,11 @@
 
 #?(:clj
    (defn- malli-check-fns
-     "{:validate :explain :humanize} of malli for the literal value check, or nil: loaded for cljs
-      (the compiler's JVM) and with the switch off (dev); with it on (a clj release) only when
-      something already loaded malli, so a release server never loads it for this check."
-     [cljs? inline?]
-     (when (or cljs? (not inline?) (find-ns 'malli.core))
+     "{:validate :explain :humanize} of malli for the literal value check, or nil: for cljs loaded
+      into the compiler's JVM; for clj only when something already loaded malli (a dev/test/REPL
+      loader), so a server compiling from source never loads it, switch on or off."
+     [cljs?]
+     (when (or cljs? (find-ns 'malli.core))
        (try {:validate (requiring-resolve 'malli.core/validate)
              :explain (requiring-resolve 'malli.core/explain)
              :humanize (requiring-resolve 'malli.error/humanize)}
@@ -325,7 +325,7 @@
                            #(when (constant-form? (:type %)) (:type %))
                            (let [props (some-> (find-var (:props spec)) deref)]
                              #(when props (peek (nth props (:index %))))))
-               mismatches (seq (literal-mismatches spec arg schema-of (malli-check-fns cljs? inline?)))]
+               mismatches (seq (literal-mismatches spec arg schema-of (malli-check-fns cljs?)))]
            (when mismatches
              (binding [*out* *err*]
                (println (str "WARNING defn-typed " file ":" line ": (" (name (:name spec)) " …) "
