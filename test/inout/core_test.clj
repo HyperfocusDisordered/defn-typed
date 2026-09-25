@@ -155,7 +155,7 @@
       (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 2) 2))))
       (is (= [] (malli-symbols expansion)))))
   (testing "defmeta: in cljs every registration is under goog.DEBUG, so a release build (goog.DEBUG false) drops the cases, the :meta and #'f; in clj it registers at load"
-    (let [expand #(@#'inout/defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})
+    (let [expand #(@#'defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})
           debug-gated? #(and (seq? %) (= 'clojure.core/when (first %)) (= 'goog.DEBUG (second %)))
           cljs (expand {:ns {:name 'app.core}})
           clj (expand nil)]
