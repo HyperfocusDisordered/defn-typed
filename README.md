@@ -91,7 +91,8 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
   :discount [:int {:min 0 :max 100 :default 0}]
 } -> :int
 
-  (quot (* price qty (- 100 discount)) 100))
+  (quot (* price qty (- 100 discount)) 100)
+)
 ```
 
 The smallest one, a single input:
@@ -113,7 +114,8 @@ The smallest one, a single input:
   (cond (zero? (mod n 15)) "FizzBuzz"
         (zero? (mod n 3))  "Fizz"
         (zero? (mod n 5))  "Buzz"
-        :else              (str n)))
+        :else              (str n))
+)
 ```
 
 A real one, from the app this library was extracted from:
@@ -135,7 +137,8 @@ A real one, from the app this library was extracted from:
 } -> [:maybe :string]
 
   (or (not-empty url-token)
-      (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param "")))))
+      (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param ""))))
+)
 ```
 
 Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
@@ -167,7 +170,8 @@ Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verb
     :qty   [:int {:default 1}]
   } -> [:map [:total :int]]
 
-    (assoc row :total (* price qty)))
+    (assoc row :total (* price qty))
+  )
   ```
 
 - **`:inout-tests`** = `[in out]` pairs, `in` = the function's single argument (the map; or the
