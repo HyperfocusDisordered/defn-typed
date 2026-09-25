@@ -397,8 +397,9 @@ unchecked and prints one line: `:malli-in-prod on <fn> but defn-typed.malli-in-p
 loaded`. A cljs release with no opted-in function and no require has no malli code, as before.
 
 - **What runs**: the input validator and the output validator, compiled once per function. On
-  success nothing else runs and nothing is allocated. On JVM 21 a 3-row function took 21 ns plain
-  and 104 ns checked; its two validators alone took 19 ns. The functions without `:malli-in-prod`
+  success nothing else runs and nothing is allocated: 72 bytes per call plain and 72 checked in
+  the benchmark harness. On JVM 21 a 3-row function took 21 ns plain and 66 to 104 ns checked
+  across runs; its two validators alone took 19 ns. The functions without `:malli-in-prod`
   are unchanged.
 - **Guarantees**:
   - the function always returns its normal result;
