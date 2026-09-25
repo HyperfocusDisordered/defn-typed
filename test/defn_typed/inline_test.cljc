@@ -176,7 +176,23 @@
                                                           :file "f" :line 1}))
                           (str err)))]
          (is (= "" (warnings true)))
-         (is (re-find #"\(scaled …\) :x 1 — should be a double\n$" (warnings false)))))))
+         (is (re-find #"\(scaled …\) :x 1 — should be a double\n$" (warnings false)))))
+     (testing "a cljs literal is judged as JS numbers at any depth: an integer-valued number fits :int, an integer fits :double; the rest is still judged"
+       (let [warnings (fn [cljs? type value]
+                        (let [err (java.io.StringWriter.)
+                              spec {:name `scaled :props `scaled-props :rows [{:key :x :index 1 :type type :required true}]}]
+                          (binding [*err* err]
+                            (with-redefs [scaled-props [:map [:x (eval type)]]]
+                              (defn-typed.core/expand-call {:spec spec :arg {:x value} :fallback :map-call :cljs? cljs?
+                                                            :file "f" :line 1})))
+                          (str err)))]
+         (is (= "" (warnings true [:int {:min 1}] 1.0)))
+         (is (re-find #":x 1\.0 — should be an integer\n$" (warnings false [:int {:min 1}] 1.0)))
+         (is (= "" (warnings true [:vector :double] [1 2])))
+         (is (= "" (warnings true [:map-of :keyword :int] {:a 2.0})))
+         (is (re-find #":x 1\.5 — should be an integer\n$" (warnings true :int 1.5)))
+         (is (re-find #":x \[1 2\] — at 0: should be at least 2\n$" (warnings true [:vector [:double {:min 2}]] [1 2])))
+         (is (re-find #":x 10\.0 — should be at most 9\n$" (warnings true [:int {:max 9}] 10.0)))))))
 
 #?(:clj
    (deftest call-site-expander

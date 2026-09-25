@@ -378,23 +378,52 @@
 
 #?(:clj
    (defn- malli-check-fns
-     "{:validate :explain :error-message} of malli for the literal value check, or nil: for cljs loaded
+     "{:validate :explain :type :error-message} of malli for the literal value check, or nil: for cljs loaded
       into the compiler's JVM; for clj only when something already loaded malli (a dev/test/REPL
       loader), so a server compiling from source never loads it, switch on or off."
      [cljs?]
      (when (or cljs? (find-ns 'malli.core))
        (try {:validate (requiring-resolve 'malli.core/validate)
              :explain (requiring-resolve 'malli.core/explain)
+             :type (requiring-resolve 'malli.core/type)
              :error-message (requiring-resolve 'malli.error/error-message)}
             (catch Exception _ nil)))))
 
 #?(:clj
+   (defn- js-number-literal
+     "A cljs literal value as the JVM reads it, with every integer-valued double (`1.0`) a long:
+      in JS both are the same number, which `:int` accepts."
+     [v]
+     (cond
+       (and (double? v) (== v (Math/rint v)) (< (Math/abs (double v)) 9.007199254740992E15)) (long v)
+       (map? v) (into {} (map (fn [[k x]] [(js-number-literal k) (js-number-literal x)])) v)
+       (vector? v) (mapv js-number-literal v)
+       (set? v) (set (map js-number-literal v))
+       :else v)))
+
+#?(:clj
+   (defn- literal-errors
+     "malli's errors for a literal value against schema, none when it fits. A cljs literal is judged
+      as JS numbers, at any depth: integer-valued doubles read as longs (js-number-literal), and a
+      number failing a double schema (`:double`, `:float`, `double?`, `float?`) is judged again as a
+      double, so `1` fits `:double` and `[:double {:min 2}]` against `1` reads `should be at least 2`."
+     [{:keys [malli schema value cljs?]}]
+     (let [value (if cljs? (js-number-literal value) value)]
+       (when-not ((:validate malli) schema value)
+         (cond->> (:errors ((:explain malli) schema value))
+           cljs? (mapcat (fn [{:keys [in schema] :as error}]
+                           (if (and (number? (:value error)) ('#{:double :float double? float?} ((:type malli) schema)))
+                             (for [e (:errors ((:explain malli) schema (double (:value error))))]
+                               (update e :in #(into (vec in) %)))
+                             [error]))))))))
+
+#?(:clj
    (defn- mismatch-reason
-     "Why value does not fit schema, as one text: malli's message for each failing part, led by its
-      path inside the value when there is one (`at 1: should be a keyword`); `does not match
+     "Why a value does not fit, as one text: malli's message for each failing part (errors), led by
+      its path inside the value when there is one (`at 1: should be a keyword`); `does not match
       <source>` (the row's schema as written) when malli has no message for a part."
-     [{:keys [malli schema value source]}]
-     (let [texts (for [error (:errors ((:explain malli) schema value))
+     [{:keys [malli errors source]}]
+     (let [texts (for [error errors
                        :let [message ((:error-message malli) error)]]
                    (when (and (string? message) (not= "unknown error" message))
                      (str (when (seq (:in error)) (str "at " (path-text (:in error)) ": ")) message)))]
@@ -409,13 +438,9 @@
       not a keyword literal: `{k 1}` may hold any key), a constant value (data, see constant-form?) its row schema rejects
       (mismatch-reason). A row whose schema cannot be evaluated here (clj: the
       evaluated props; cljs: the source form when it is data) skips the value check. JVM malli
-      judges a cljs literal: a cljs number is a double, so a number it rejects is judged again as
-      one (`1` fits `:double`)."
+      judges a cljs literal as JS numbers (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
      [{:keys [spec arg schema-of malli cljs?]}]
-     (let [row-of (into {} (map (juxt :key identity)) (:rows spec))
-           fits? (fn [schema v]
-                   (or ((:validate malli) schema v)
-                       (and cljs? (number? v) ((:validate malli) schema (double v)))))]
+     (let [row-of (into {} (map (juxt :key identity)) (:rows spec))]
        (concat
         (when (:closed spec)
           (for [k (keys arg) :when (and (keyword? k) (not (contains? row-of k)))]
@@ -428,8 +453,9 @@
                 :let [row (row-of k)]
                 :when (and row (constant-form? v))
                 :let [reason (try (let [schema (schema-of row)]
-                                    (when (and (some? schema) (not (fits? schema v)))
-                                      (mismatch-reason {:malli malli :schema schema :value v
+                                    (when-let [errors (and (some? schema)
+                                                           (seq (literal-errors {:malli malli :schema schema :value v :cljs? cljs?})))]
+                                      (mismatch-reason {:malli malli :errors errors
                                                         :source (:type row)})))
                                   (catch Exception _ nil))]
                 :when reason]
