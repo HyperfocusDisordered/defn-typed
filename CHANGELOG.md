@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 (2026-09-25)
+
+- clj-kondo hook: a `defn-typed` without `->` reports "expected ->" and the rest of the file still lints
+  (before, clj-kondo printed "Can't parse <file>" and dropped every other finding of that file).
+
 ## 0.1.2 (2026-09-25)
 
 - First release on Clojars (`io.github.hyperfocusdisordered/defn-typed`); library code unchanged since 0.1.1.
