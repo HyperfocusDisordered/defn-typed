@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.1 (2026-09-25)
+
+- A body may call its own function by name (a recursive call, or the name passed as a value): clj
+  compiles it again, cljs has no `:undeclared-var` warning.
+- A clj server compiling from source no longer loads malli: the compile-time value check runs only
+  when malli is already loaded (dev REPL/test loaders load it first); key checks always run.
+- A body whose `recur` targets the function keeps it in the map fn, so `recur` takes the map as in
+  0.1.4 (1 row: no ClassCastException; 2+ rows: compiles).
+- cljs: an integer literal fits a `:double` row in the compile-time check (cljs numbers are
+  doubles), so `(scale {:x 1})` neither warns nor falls back to the map call.
+- An unknown key warns only for a closed input map (`^{:closed true}`); a key that is not a keyword
+  literal (`{k 100}`) skips the key checks and the rewrite.
+- cljs: the call-site macro exists in release (`:advanced`) builds only; dev builds keep the
+  shadow-cljs cache (before, every namespace defining a `defn-typed` recompiled on every build)
+  and compile plain calls.
+- README: the switch is for release builds; with it on, a REPL redefinition can leave stale
+  positional call sites.
+- clj-kondo hook and macro: `(defmeta 5 …)`, `(defn-typed)`, an odd input map and two rows binding
+  one local are a finding naming the problem (the file's other findings stay) and a compile error.
+- A row whose type or props slot is a symbol and carries a default is `{:optional true}` in
+  `<name>-props`, so an instrumented call may omit it.
+- README: a cljs `:refer`red call from another namespace gets neither the literal check nor the
+  rewrite.
+- Literal-check warnings read `<key> <value> — <reason>`: a part inside the value leads with its
+  path (`at 1: should be a keyword`); without a malli message, `does not match <schema>`.
+
 ## 0.2.0 (2026-09-25)
 
 - Defaults cost nothing at call time: they are the `:or` of the function's destructuring, taken
