@@ -194,7 +194,8 @@
      (testing "an open input map takes keys beyond the rows; a key that is not a keyword literal may be any key"
        (is (= "" (compile-warnings '(order-total {:price 100 :zz 1}))))
        (is (= "" (compile-warnings '(whole {:a 1 :z 3}))))
-       (is (= "" (compile-warnings '(let [k :price] (order-total {k 100}))))))
+       (is (= "" (compile-warnings '(let [k :price] (order-total {k 100})))))
+       (is (= "" (compile-warnings '(via-symbol {})))))
      (testing "a fitting literal, a non-constant value, and a map that is not a literal print nothing"
        (is (= "" (compile-warnings '(order-total {:price 100 :qty 2}))))
        (is (= "" (compile-warnings '(let [q 0] (order-total {:price 100 :qty q})))))

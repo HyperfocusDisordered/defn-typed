@@ -139,20 +139,25 @@
 
 (def entry-default-rule "put :default into the schema's props: [:int {:default v}]")
 
+(declare defaults-optional)
+
+(defn optional-if-defaulted
+  "A `[:map …]` row marked `{:optional true}` when its type carries `:default` in its own props,
+   its type's own rows marked the same way (defaults-optional). A defn-typed evaluates it at the
+   def for a row whose type holds a symbol or a call, where only the value shows the default."
+  [row]
+  (let [[k row-props type] (row-parts row)
+        row-props (cond-> row-props
+                    (contains? (schema-props type) :default) (assoc :optional true))]
+    (if row-props [k row-props (defaults-optional type)] [k (defaults-optional type)])))
+
 (defn defaults-optional
   "schema with every `[:map …]` row whose type carries `:default` in its own props marked
    `{:optional true}` (nested maps included): instrumentation checks a call before with-defaults
    fills the defaults, so a defaulted key may be absent."
   [schema]
   (if (and (vector? schema) (= :map (first schema)))
-    (into [:map]
-          (map #(if (vector? %)
-                  (let [[k row-props type] (row-parts %)
-                        row-props (cond-> row-props
-                                    (contains? (schema-props type) :default) (assoc :optional true))]
-                    (if row-props [k row-props (defaults-optional type)] [k (defaults-optional type)]))
-                  %))
-          (rest schema))
+    (into [:map] (map #(if (vector? %) (optional-if-defaulted %) %)) (rest schema))
     schema))
 
 (defn path-text
@@ -428,6 +433,11 @@
              _ (when-let [paths (seq (entry-default-paths table))]
                  (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))
              in-schema (defaults-optional table)
+             ;; a row whose type holds a symbol or a call shows its default only when evaluated
+             props-form (into [] (map #(if (and (vector? %) (not (constant-form? (peek %))))
+                                         `(optional-if-defaulted ~%)
+                                         %))
+                              in-schema)
              ;; ^{:as sym} on the input map = Clojure's own :as: sym = the whole defaults-filled map
              whole (:as (meta (first input)))
              _ (when-not (or (nil? whole) (simple-symbol? whole))
@@ -446,7 +456,9 @@
                             (cond-> (assoc plan :runtime (runtime-type? type))
                               (default-slot? type) (assoc :absent (default-form plan))
                               (and (not (default-slot? type)) (:optional row-props)) (assoc :absent nil)
-                              (not (or (default-slot? type) (:optional row-props))) (assoc :required true))))
+                              ;; a type written as a symbol or a call may carry a default: not judged
+                              (not (or (default-slot? type) (:optional row-props) (symbol? type) (seq? type)))
+                              (assoc :required true))))
                         (filter vector? (rest in-schema))))
              locals (cond-> (mapv :local rows) whole (conj whole))
              ;; clojure fns take at most 20 positional params: a larger table keeps its body in name;
@@ -483,7 +495,7 @@
          (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
          (if positional?
            `(do
-              (def ~props ~in-schema)
+              (def ~props ~props-form)
               ;; the body calls name before its defn: a recursive call, name passed as a value
               (declare ~fn-name)
               (defn ~positional {:no-doc true} ~locals ~@body)
@@ -491,7 +503,7 @@
                 (let ~bindings
                   (~positional ~@locals))))
            `(do
-              (def ~props ~in-schema)
+              (def ~props ~props-form)
               (defn ~fn-name ~attrs [~m]
                 (let ~bindings
                   ~@body))))))))

@@ -111,6 +111,13 @@
                         (catch Exception e (ex-message e))))
           (pr-str bad)))))
 
+(def symslot-opts {:default 3})
+(def symslot-type [:int {:default 7}])
+
+(defn-typed symslot {:q [:int symslot-opts] :k symslot-type} -> :any
+  [q k]
+)
+
 (deftest defn-typed-schema-is-instrumented
   (mi/collect! {:ns ['defn-typed.core-test]})
   (mi/instrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]})
@@ -124,6 +131,9 @@
         (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))
         (testing "malli-reasons: one `<key path> · <message> · got <value>` line per failing key"
           (is (= [":c · disallowed key · got 3"] (core/malli-reasons (core/malli-fns) data))))))
+    (testing "a row whose props slot or type is a symbol and carries a default is optional in <name>-props, so an instrumented call may leave it out"
+      (is (= [:map [:q {:optional true} [:int {:default 3}]] [:k {:optional true} [:int {:default 7}]]] symslot-props))
+      (is (= [3 7] (symslot {}))))
     (finally
       (mi/unstrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]}))))
 
