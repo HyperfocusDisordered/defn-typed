@@ -3,6 +3,7 @@
    function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
    expand to, and their release form."
   (:require [defn-typed.core :as core :refer [defn-typed defmeta]]
+            [clj-kondo.core :as kondo]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [malli.instrument :as mi]))
@@ -191,3 +192,35 @@
       (is (= 2 (count (filter debug-gated? cljs))))
       (is (= [] (filter debug-gated? clj)))
       (is (= [] (malli-symbols cljs) (malli-symbols clj))))))
+
+(defn- hook-findings
+  "[row message] of each clj-kondo finding for code (a refer the snippet leaves unused, row 1, not
+   included), linted with the exported hooks only."
+  [code]
+  (->> (with-in-str (str "(ns k (:require [defn-typed.core :refer [defn-typed defmeta]]))\n" code)
+         (kondo/run! {:lint ["-"] :lang :clj :cache false
+                      :config-dir "resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed"}))
+       :findings
+       (remove #(= 1 (:row %)))
+       (mapv (juxt :row :message))))
+
+(deftest malformed-forms
+  (testing "the clj-kondo hook reports a malformed form as a finding naming the problem, and the file's other findings stay"
+    (let [others [3 "k/g is called with 2 args but expects 1"]
+          lint #(hook-findings (str "(defn g [x] x)\n(g 1 2)\n" %))]
+      (is (= [others [4 "defmeta: the first argument must be the function's name"]]
+             (lint "(defmeta 5 {:doc \"x\"})")))
+      (is (= [others [4 "defn-typed: the first argument must be the function's name"]]
+             (lint "(defn-typed)")))
+      (is (= [others [4 "defn-typed: the input map has a key without a schema: {key schema …}"]]
+             (lint "(defn-typed f {:a :int :b} -> :any a)")))
+      (is (= [others [4 "defn-typed: :x/b and :y/b both bind b"]]
+             (lint "(defn-typed f {:x/b :int :y/b :int} -> :any b)")))))
+  (testing "the macro throws a compile error naming the same problem (an odd map literal is the reader's error)"
+    (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
+      (is (= "defmeta 5: the first argument must be the function's name" (error '(defn-typed.core/defmeta 5 {:doc "x"}))))
+      (is (= "defn-typed: the first argument must be the function's name, got nothing" (error '(defn-typed.core/defn-typed))))
+      (is (= "defn-typed f: :x/b and :y/b both bind b" (error '(defn-typed.core/defn-typed f {:x/b :int :y/b :int} -> :any b))))
+      (is (= "defn-typed f: :a and ^{:as a} both bind a" (error '(defn-typed.core/defn-typed f ^{:as a} {:a :int} -> :any a))))
+      (is (= "Map literal must contain an even number of forms"
+             (try (read-string "(defn-typed f {:a :int :b} -> :any a)") (catch Exception e (ex-message e))))))))

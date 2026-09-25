@@ -45,8 +45,14 @@
             :when (api/keyword-node? k)]
       (entry-defaults! finding! (conj path (api/sexpr k)) (when b a) (or b a)))))
 
-(defn defn-typed [{:keys [node]}]
-  (let [[fn-name & more] (rest (:children node))
+(defn- name-node?
+  "Whether node is a symbol token: the function's name."
+  [node]
+  (and node (api/token-node? node) (symbol? (api/sexpr node))))
+
+(defn- defn-typed-form [node]
+  (let [[written-name & more] (rest (:children node))
+        fn-name (if (name-node? written-name) written-name (api/token-node 'defn-typed-unnamed))
         [doc more] (if (api/string-node? (first more)) [(first more) (rest more)] [nil more])
         arrow? #(and (api/token-node? %) (= '-> (api/sexpr %)))
         [input [arrow & after-arrow]] (split-with (complement arrow?) more)
@@ -81,6 +87,13 @@
         locals (keep #(let [k (first (:children %))]
                         (when (api/keyword-node? k) (api/token-node (symbol (name (api/sexpr k))))))
                      row-nodes)]
+    (when-not (name-node? written-name)
+      (finding! written-name "the first argument must be the function's name"))
+    (when (and table? (odd? (count (:children table))))
+      (finding! table "the input map has a key without a schema: {key schema …}"))
+    (doseq [[local ks] (group-by #(name (api/sexpr %)) (filter api/keyword-node? (take-nth 2 (:children (when table? table)))))
+            :when (next ks)]
+      (finding! (second ks) (str (apply str (interpose " and " (map (comp pr-str api/sexpr) ks))) " both bind " local)))
     (when doc
       (finding! doc "docstring goes to defmeta"))
     (if arrow
@@ -118,14 +131,27 @@
                                      body))]))])
              (meta node))}))
 
+(defn defn-typed [{:keys [node]}]
+  (if (nil? (second (:children node)))
+    ;; (defn-typed): nothing to rewrite, the call itself lints as it is
+    (do (api/reg-finding! (assoc (meta node) :message "defn-typed: the first argument must be the function's name"
+                                 :type :syntax))
+        nil)
+    (defn-typed-form node)))
+
 (defn defmeta [{:keys [node]}]
-  (let [[fn-name m] (rest (:children node))]
+  (let [[fn-name m] (rest (:children node))
+        named? (name-node? fn-name)]
+    (when-not named?
+      (api/reg-finding! (assoc (meta (or fn-name node))
+                               :message "defmeta: the first argument must be the function's name"
+                               :type :syntax)))
     (when-not (and m (api/map-node? m))
       (api/reg-finding! (assoc (meta (or m node))
                                :message "defmeta: the metadata must be a map literal"
                                :type :syntax)))
     {:node (with-meta
-             (api/list-node (concat [(api/token-node 'do)
-                                     (api/list-node [(api/token-node 'declare) fn-name])]
+             (api/list-node (concat [(api/token-node 'do)]
+                                    (when named? [(api/list-node [(api/token-node 'declare) fn-name])])
                                     (when m [m])))
              (meta node))}))
