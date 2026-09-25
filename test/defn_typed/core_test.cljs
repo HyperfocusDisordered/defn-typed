@@ -52,7 +52,9 @@
   (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
     (is (= [:map {:closed true} [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
     ;; cljs var metadata keeps the source form; malli's collect! evaluates it (see below)
-    (is (= '[:=> [:cat padded-props] :int] (:malli/schema (meta #'padded)))))
+    (is (= '[:=> [:cat padded-props] :int] (:malli/schema (meta #'padded))))
+    (testing "the arglist is the rows as a destructuring map, so doc shows the inputs"
+      (is (= '([{:keys [a b]}]) (:arglists (meta #'padded))))))
   (testing "defaults come from the row type's own props; the absent key is filled"
     (is (= 3 (padded {:a 1})))
     (is (= 6 (padded {:a 1 :b 5})))))

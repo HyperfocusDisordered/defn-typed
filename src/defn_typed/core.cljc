@@ -14,8 +14,9 @@
    `defmeta` (above f) expands to (declare f) + the registration of its cases and keys, and leaves
    its map for the defn-typed below, which puts :doc and the other keys into f's attr-map.
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]),
-   (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]} [m]
-   (let [{:keys [k] :or {k 1}} m] (f--positional k))); every call site goes through expand-call.
+   (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]
+   :arglists '([{:keys [k]}])} [m] (let [{:keys [k] :or {k 1}} m] (f--positional k))); every call
+   site goes through expand-call.
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map
@@ -23,7 +24,8 @@
    registered cases win. Works in clj and cljs; this namespace never loads malli: `:malli/schema`
    is plain var metadata until a dev/test/REPL loader runs malli.instrument collect! + instrument!.
    - `check-var` / `check-ns` return data (any REPL, including the browser runtime);
-   - `deftests!` (clj) defines one clojure.test test per such var so run-tests and CI see them;
+   - `deftests!` (clj) defines one clojure.test test `<ns>--<fn>-inout` per such var so run-tests
+     and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
   #?(:clj (:require [clojure.test :as test])
      :cljs (:require-macros [defn-typed.core])))
@@ -538,8 +540,9 @@
       filled; `^{:as row}` on the map also binds the whole map as with-defaults fills it (keys beyond
       the rows included, `[:map …]` is open) to `row`. Expands to `(def <name>-props [:map …])`,
       `(defn <name>--positional [k… row?] body…)` (the rows in entry order) and
-      `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>]} [m] (let [{:keys [k…] :or {k default}} m]
-      (<name>--positional k…)))`, so everything that reads defn and :malli/schema sees a plain defn.
+      `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>] :arglists '([{:keys [k…]}])} [m]
+      (let [{:keys [k…] :or {k default}} m] (<name>--positional k…)))`, so everything that reads defn
+      and :malli/schema sees a plain defn, and doc shows the rows as its arglist.
       A default = `:default` in the row type's own props (`:qty [:int {:default 1}]`), read at
       compile time; a row whose defaults only the evaluated schema shows (runtime-type?) is bound
       through row-value, and `^{:as row}` through with-defaults. Instrumentation checks the call
@@ -624,7 +627,9 @@
                      ;; a :malli-in-prod call must pass the check in name: never the positional call
                      (and positional? (not whole) (not-any? :runtime rows) (not malli-opts))
                      (assoc :positional (qualified &env positional)))
-              attrs (cond-> (merge meta-keys {:malli/schema [:=> [:cat props] out-schema]})
+              ;; the map's rows as a destructuring arglist, so doc and editors show the inputs, not m
+              arglists (list 'quote (list [(cond-> {:keys (mapv :binding rows)} whole (assoc :as whole))]))
+              attrs (cond-> (merge {:arglists arglists} meta-keys {:malli/schema [:=> [:cat props] out-schema]})
                       (not cljs?) (assoc :inline-arities #{1}
                                          ;; the fallback is a host call on the var's value: no op
                                          ;; position, so it is never expanded again
@@ -865,13 +870,15 @@
 
 #?(:clj
    (defn deftests!
-     "Defines `<fn>-inout` tests in the calling ns for every var of ns-sym with cases."
+     "Defines a test `<ns>--<fn>-inout` in the calling ns for every var of ns-sym with cases: the ns
+      in the name, so functions of one name in two namespaces get two tests in the ns collecting them."
      [ns-sym]
      (require ns-sym)
      (doseq [v (case-vars (concat (registered-vars ns-sym) (vals (ns-interns ns-sym))))]
        (var-cases v)
-       (let [test-var (intern *ns*
-                              (with-meta (symbol (str (name (var-name v)) "-inout"))
+       (let [sym (var-name v)
+             test-var (intern *ns*
+                              (with-meta (symbol (str (namespace sym) "--" (name sym) "-inout"))
                                 {:test #(assert-cases v)})
                               nil)]
          (alter-var-root test-var (constantly #(test/test-var test-var)))))))

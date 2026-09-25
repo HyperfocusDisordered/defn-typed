@@ -1,9 +1,10 @@
 (ns defn-typed.core-test
-  "Runs the in/out cases written next to defn-typed.core's own functions (one `<fn>-inout` test per
-   function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
+  "Runs the in/out cases written next to defn-typed.core's own functions (one `<ns>--<fn>-inout`
+   test per function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
    expand to, and their release form."
   (:require [defn-typed.core :as core :refer [defn-typed defmeta]]
             [clj-kondo.core :as kondo]
+            [clojure.repl]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [malli.instrument :as mi]))
@@ -50,7 +51,11 @@
     (is (= [:map {:closed true} [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
     (is (= [:=> [:cat padded-props] :int] (:malli/schema (meta #'padded))))
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
-    (is (= [1] (map count (:arglists (meta #'padded))))))
+    (is (= '([{:keys [a b]}]) (:arglists (meta #'padded)))))
+  (testing "the arglist is the rows as a destructuring map, so doc shows the inputs; ^{:as row} adds :as, a qualified key reads as its binding"
+    (is (str/includes? (with-out-str (clojure.repl/doc padded)) "([{:keys [a b]}])"))
+    (is (= ''([{:keys [a x/b] :as row}])
+           (:arglists (nth (last (macroexpand-1 '(defn-typed.core/defn-typed f ^{:as row} {:a :int :x/b :int} -> :any row))) 2)))))
   (testing "a map without metadata turns into a bare [:map …] in entry order; `key [props schema]` is a row with props; every row key is a local, a qualified key by its name"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int :x/b [{:optional true} :int]} -> :any [a b]))]
       (is (= '(def f-props [:map [:a :int] [:x/b {:optional true} :int]]) (second expansion)))
@@ -163,6 +168,20 @@
       (core/forget-ns! 'defn-typed.scratch)
       (is (= [] (core/check-ns 'defn-typed.scratch)))
       (finally (remove-ns 'defn-typed.scratch)))))
+
+(deftest deftests-per-namespace
+  (testing "deftests! names each test <ns>--<fn>-inout: functions of one name in two namespaces get two tests in the collecting ns, each running its own cases"
+    (let [collector (create-ns 'defn-typed.twin-tests)]
+      (try
+        (binding [*ns* collector]
+          (run! core/deftests! '[defn-typed.twin-a defn-typed.twin-b]))
+        (is (= '[defn-typed.twin-a--same-inout defn-typed.twin-b--same-inout]
+               (sort (keys (ns-interns collector)))))
+        (is (= {:test 2 :pass 3 :fail 0 :error 0}
+               (binding [clojure.test/*report-counters* (ref clojure.test/*initial-report-counters*)]
+                 (clojure.test/test-vars (vals (ns-interns collector)))
+                 (select-keys @clojure.test/*report-counters* [:test :pass :fail :error]))))
+        (finally (remove-ns 'defn-typed.twin-tests))))))
 
 (defn- malli-symbols
   "Symbols of form (at any depth) whose namespace is a malli one."
