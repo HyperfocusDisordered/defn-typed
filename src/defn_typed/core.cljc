@@ -99,6 +99,73 @@
               (alter-meta! v dissoc :inout-tests))))
   ns-sym)
 
+(defn print-err!
+  "Prints text as one line to stderr (cljs: console.error)."
+  [text]
+  #?(:clj (binding [*out* *err*] (println text))
+     :cljs (js/console.error text)))
+
+(defonce ^{:doc "The fn that builds the checker of a `:malli-in-prod` function from its slot's spec, or nil.
+   `defn-typed.malli-in-prod` sets it when it loads; this namespace never loads malli."}
+  malli-checker-builder
+  (atom nil))
+
+(defn malli-in-prod-slot
+  "The holder a `:malli-in-prod` function checks through: its spec `{:fn :input :output :opts}`,
+   then the checker built from it on the first call (malli-checker)."
+  [spec]
+  (atom {:spec spec}))
+
+(defn malli-checker
+  "slot's checker, built by malli-checker-builder on the first call made once it is set, which
+   compiles the validators once per function. nil while `defn-typed.malli-in-prod` is not loaded
+   (one stderr line per function) or when building failed (one stderr line): the call then runs
+   unchecked."
+  [slot]
+  (let [{:keys [checker spec warned failed]} @slot]
+    (or checker
+        (if-let [build @malli-checker-builder]
+          (when-not failed
+            (try (let [built (build spec)]
+                   (swap! slot assoc :checker built)
+                   built)
+                 (catch #?(:clj Throwable :cljs :default) e
+                   (swap! slot assoc :failed true)
+                   (print-err! (str "defn-typed: :malli-in-prod on " (:fn spec) " is off, its schemas did not compile: "
+                                    (ex-message e)))
+                   nil)))
+          (do (when-not warned
+                (swap! slot assoc :warned true)
+                (print-err! (str "defn-typed: :malli-in-prod on " (:fn spec)
+                                 " but defn-typed.malli-in-prod is not loaded")))
+              nil)))))
+
+(defn malli-check?
+  "Whether this call of a `:malli-in-prod` function is checked: a checker, and no `:sample` or the
+   checker's sampled? draw falls under it."
+  [checker]
+  (boolean (and checker (or (nil? (:sample checker)) ((:sampled? checker))))))
+
+(defn malli-check!
+  "Checks value (`:input` the call's map, `:output` its result) with checker; nil. The checker never
+   throws and reports a violation off the call path."
+  [checker direction value]
+  ((:check! checker) direction value))
+
+(defn malli-in-prod-opts-problem
+  "Why v cannot be a defmeta's `:malli-in-prod` (true, false, or a map literal with optional
+   `:sample`, a number 0 < x ≤ 1, and `:redact`, a set literal of keys), else nil."
+  [v]
+  (cond
+    (boolean? v) nil
+    (not (map? v)) (str "true or a map {:sample 0<x≤1 :redact #{key …}}, got " (pr-str v))
+    (seq (dissoc v :sample :redact)) (str "takes :sample and :redact, got " (pr-str (keys (dissoc v :sample :redact))))
+    (and (contains? v :sample) (not (and (number? (:sample v)) (< 0 (:sample v)) (<= (:sample v) 1))))
+    (str ":sample is a number 0 < x ≤ 1, got " (pr-str (:sample v)))
+    (and (contains? v :redact) (not (set? (:redact v))))
+    (str ":redact is a set of keys, got " (pr-str (:redact v)))
+    :else nil))
+
 #?(:clj
    (defmacro tests
      "Legacy: registers v's cases, a vector of [[args…] expected] pairs, for a function of several
@@ -492,13 +559,15 @@
                                 m]
                                (mapcat #(vector (:local %) `(row-value (nth ~props ~(:index %)) ~m))
                                        (filter :runtime rows))))
-              spec (cond-> {:name q :props q-props :closed (true? (:closed (schema-props in-schema)))
-                            :rows (mapv #(select-keys % [:key :index :type :absent :required]) rows)}
-                     (and positional? (not whole) (not-any? :runtime rows))
-                     (assoc :positional (qualified &env positional)))
               ;; the defmeta written above: its keys other than the cases go into the defn's attr-map,
               ;; so :doc is the var's docstring in clj and cljs alike
               meta-keys (dissoc (get @pending-meta q) :inout-tests)
+              malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
+              spec (cond-> {:name q :props q-props :closed (true? (:closed (schema-props in-schema)))
+                            :rows (mapv #(select-keys % [:key :index :type :absent :required]) rows)}
+                     ;; a :malli-in-prod call must pass the check in name: never the positional call
+                     (and positional? (not whole) (not-any? :runtime rows) (not malli-opts))
+                     (assoc :positional (qualified &env positional)))
               attrs (cond-> (merge meta-keys {:malli/schema [:=> [:cat props] out-schema]})
                       (not cljs?) (assoc :inline-arities #{1}
                                          ;; the fallback is a host call on the var's value: no op
@@ -510,20 +579,35 @@
           (swap! pending-meta dissoc q)
           ;; cljs: a release build only (see install-cljs-expander!); a dev build keeps plain calls
           (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
-          (if positional?
-            `(do
-               (def ~props ~props-form)
-               ;; the body calls name before its defn: a recursive call, name passed as a value
-               (declare ~fn-name)
-               (defn ~positional {:no-doc true} ~locals ~@body)
-               (defn ~fn-name ~attrs [~m]
-                 (let ~bindings
-                   (~positional ~@locals))))
-            `(do
-               (def ~props ~props-form)
-               (defn ~fn-name ~attrs [~m]
-                 (let ~bindings
-                   ~@body)))))))))
+          (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
+                body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))]
+            (if-not malli-opts
+              `(do
+                 (def ~props ~props-form)
+                 ;; the body calls name before its defn: a recursive call, name passed as a value
+                 ~@(when positional? [`(declare ~fn-name) body-defn])
+                 (defn ~fn-name ~attrs [~m]
+                   ~call))
+              ;; :malli-in-prod: name checks the map and the result around the body, which lives in
+              ;; <name>--positional or <name>--body (a recur there recurs with the map, unchecked)
+              (let [slot (symbol (str fn-name "--malli-in-prod"))
+                    body-fn (symbol (str fn-name "--body"))
+                    checker (gensym "checker")
+                    check? (gensym "check")
+                    result (gensym "result")]
+                `(do
+                   (def ~props ~props-form)
+                   (def ~(with-meta slot {:no-doc true})
+                     (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts}))
+                   (declare ~fn-name)
+                   ~(or body-defn `(defn ~body-fn {:no-doc true} [~m] ~call))
+                   (defn ~fn-name ~attrs [~m]
+                     (let [~checker (malli-checker ~slot)
+                           ~check? (malli-check? ~checker)]
+                       (when ~check? (malli-check! ~checker :input ~m))
+                       (let [~result ~(if positional? call `(~body-fn ~m))]
+                         (when ~check? (malli-check! ~checker :output ~result))
+                         ~result))))))))))))
 
 #?(:clj
    (defmacro defmeta
@@ -543,6 +627,8 @@
          (fail! "the first argument must be the function's name"))
        (when-not (map? m)
          (fail! (str "the metadata must be a map literal, got " (pr-str m))))
+       (when-let [problem (and (contains? m :malli-in-prod) (malli-in-prod-opts-problem (:malli-in-prod m)))]
+         (fail! (str ":malli-in-prod is " problem)))
        (swap! pending-meta assoc (qualified &env fn-name) m)
        (let [other (dissoc m :inout-tests)
              q (qualified &env fn-name)]
