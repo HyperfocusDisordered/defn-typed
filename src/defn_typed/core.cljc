@@ -283,22 +283,36 @@
 
 #?(:clj
    (defn- malli-check-fns
-     "{:validate :explain :humanize} of malli for the literal value check, or nil: for cljs loaded
+     "{:validate :explain :error-message} of malli for the literal value check, or nil: for cljs loaded
       into the compiler's JVM; for clj only when something already loaded malli (a dev/test/REPL
       loader), so a server compiling from source never loads it, switch on or off."
      [cljs?]
      (when (or cljs? (find-ns 'malli.core))
        (try {:validate (requiring-resolve 'malli.core/validate)
              :explain (requiring-resolve 'malli.core/explain)
-             :humanize (requiring-resolve 'malli.error/humanize)}
+             :error-message (requiring-resolve 'malli.error/error-message)}
             (catch Exception _ nil)))))
+
+#?(:clj
+   (defn- mismatch-reason
+     "Why value does not fit schema, as one text: malli's message for each failing part, led by its
+      path inside the value when there is one (`at 1: should be a keyword`); `does not match
+      <source>` (the row's schema as written) when malli has no message for a part."
+     [{:keys [malli schema value source]}]
+     (let [texts (for [error (:errors ((:explain malli) schema value))
+                       :let [message ((:error-message malli) error)]]
+                   (when (and (string? message) (not= "unknown error" message))
+                     (str (when (seq (:in error)) (str "at " (path-text (:in error)) ": ")) message)))]
+       (if (and (seq texts) (every? some? texts))
+         (apply str (interpose ", " (distinct texts)))
+         (str "does not match " (pr-str source))))))
 
 #?(:clj
    (defn- literal-mismatches
      "Why a map-literal argument does not fit the rows, one text per finding: an unknown key (a
       closed input map only: `[:map …]` is open), a missing required key (not judged when a key is
       not a keyword literal: `{k 1}` may hold any key), a constant value (data, see constant-form?) its row schema rejects
-      (with malli's humanized reason). A row whose schema cannot be evaluated here (clj: the
+      (mismatch-reason). A row whose schema cannot be evaluated here (clj: the
       evaluated props; cljs: the source form when it is data) skips the value check. JVM malli
       judges a cljs literal: a cljs number is a double, so a number it rejects is judged again as
       one (`1` fits `:double`)."
@@ -320,10 +334,8 @@
                 :when (and row (constant-form? v))
                 :let [reason (try (let [schema (schema-of row)]
                                     (when (and (some? schema) (not (fits? schema v)))
-                                      (let [h ((:humanize malli) ((:explain malli) schema v))]
-                                        (if (and (sequential? h) (every? string? h))
-                                          (apply str (interpose ", " h))
-                                          (pr-str h)))))
+                                      (mismatch-reason {:malli malli :schema schema :value v
+                                                        :source (:type row)})))
                                   (catch Exception _ nil))]
                 :when reason]
             (str (pr-str k) " " (pr-str v) " — " reason)))))))

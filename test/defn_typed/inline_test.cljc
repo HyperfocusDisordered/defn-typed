@@ -73,6 +73,14 @@
   [a b]
 )
 
+(defn-typed shaped {
+  :tags [{:optional true} [:vector :keyword]]
+  :opts [{:optional true} [:map-of :keyword :int]]
+  :f    [{:optional true} [:fn pos?]]
+} -> :any
+  [tags opts f]
+)
+
 (defn-typed scaled {:x :double} -> :any
   x
 )
@@ -196,6 +204,13 @@
        (is (= "" (compile-warnings '(whole {:a 1 :z 3}))))
        (is (= "" (compile-warnings '(let [k :price] (order-total {k 100})))))
        (is (= "" (compile-warnings '(via-symbol {})))))
+     (testing "a reason is `<key> <value> — <text>`: a part inside the value leads with its path; a part malli has no message for reads `does not match <schema as written>`"
+       (is (re-find #"\(shaped …\) :tags \[:a 1\] — at 1: should be a keyword\n$"
+                    (compile-warnings '(shaped {:tags [:a 1]}))))
+       (is (re-find #"\(shaped …\) :opts \{\"x\" 1\} — at \"x\": should be a keyword\n$"
+                    (compile-warnings '(shaped {:opts {"x" 1}}))))
+       (is (re-find #"\(shaped …\) :f 0 — does not match \[:fn pos\?\]\n$"
+                    (compile-warnings '(shaped {:f 0})))))
      (testing "a fitting literal, a non-constant value, and a map that is not a literal print nothing"
        (is (= "" (compile-warnings '(order-total {:price 100 :qty 2}))))
        (is (= "" (compile-warnings '(let [q 0] (order-total {:price 100 :qty q})))))
