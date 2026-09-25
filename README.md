@@ -1,4 +1,4 @@
-# inout
+# defn-typed
 
 A function's input/output contract and its examples, written next to the function.
 
@@ -17,7 +17,7 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
 ```clojure
 ;; deps.edn
-{:deps {io.github.denisovchar/inout {:local/root "/path/to/inout"}}}
+{:deps {io.github.denisovchar/defn-typed {:local/root "/path/to/defn-typed"}}}
 ```
 
 `metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).
@@ -28,7 +28,7 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
 
 <!-- readme-test -->
 ```clojure
-(ns example (:require [inout.core :refer [defn-typed defmeta]]))
+(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
 
 (defmeta fizzbuzz
   {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
@@ -70,7 +70,7 @@ A real one, from the app this library was extracted from:
       (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param "")))))
 ```
 
-Both blocks run as a test (`test/inout/readme_test.clj` evaluates them verbatim).
+Both blocks run as a test (`test/core/readme_test.clj` evaluates them verbatim).
 
 ## Grammar
 
@@ -120,7 +120,7 @@ Both blocks run as a test (`test/inout/readme_test.clj` evaluates them verbatim)
 (do (def name-props [:map [key schema] …])
     (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc …}
       [m]
-      (let [{:keys [key …]} (inout.core/with-defaults name-props m)]
+      (let [{:keys [key …]} (defn-typed.core/with-defaults name-props m)]
         body…)))
 ```
 
@@ -139,23 +139,23 @@ literal reads as a hash map; the order is cosmetic).
   `defmeta`'s registrations (cases, `:meta`, `#'f`) sit under `goog.DEBUG`, so a release build
   drops them. The released bundle has no malli code and no cases.
 - `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword in the attr-map):
-  nothing it emits loads malli. `test/inout/core_test.clj` `release-form` asserts this.
+  nothing it emits loads malli. `test/core/core_test.clj` `release-form` asserts this.
 
 ## clj-kondo
 
-The hooks ship in `resources/clj-kondo.exports/io.github.denisovchar/inout/`. In the consuming
+The hooks ship in `resources/clj-kondo.exports/io.github.denisovchar/defn-typed/`. In the consuming
 project:
 
 ```sh
 clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
 ```
 
-It copies them to `.clj-kondo/imports/io.github.denisovchar/inout/`, which clj-kondo loads with no
+It copies them to `.clj-kondo/imports/io.github.denisovchar/defn-typed/`, which clj-kondo loads with no
 further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
 arrow and the body as the `def` + `defn` above, with the row keys as locals, and reports the same
 shape errors as the macro; the `defmeta` hook lints the map as code.
 
-## Check API (`inout.core`)
+## Check API (`defn-typed.core`)
 
 | fn | returns / does |
 |---|---|

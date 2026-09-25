@@ -1,2 +1,0 @@
-{:hooks {:analyze-call {inout.core/defn-typed hooks.inout/defn-typed
-                        inout.core/defmeta hooks.inout/defmeta}}}

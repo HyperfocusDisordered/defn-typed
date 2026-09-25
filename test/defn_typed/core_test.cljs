@@ -1,8 +1,8 @@
-(ns inout.core-test
-  "Runs the in/out cases written next to inout.core's own functions. Below them: the pair format
+(ns defn-typed.core-test
+  "Runs the in/out cases written next to defn-typed.core's own functions. Below them: the pair format
    and what `defn-typed` and `defmeta` expand to, in cljs."
   (:require [cljs.test :refer [deftest is testing]]
-            [inout.core :as inout :refer [defn-typed defmeta]]
+            [defn-typed.core :as core :refer [defn-typed defmeta]]
             [malli.instrument :as mi]))
 
 (defn- summary [results]
@@ -10,8 +10,8 @@
    :failures (vec (mapcat :failures results))})
 
 (deftest inout-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'inout.core))]
-    (testing "inout.core"
+  (let [{:keys [cases failures]} (summary (core/check-ns 'defn-typed.core))]
+    (testing "defn-typed.core"
       (is (pos? cases))
       (is (= [] failures)))))
 
@@ -35,18 +35,18 @@
 
 (deftest pairs-are-the-cases
   (testing "registered pairs and attr-map pairs read as [i args expected]"
-    (is (= [[0 [{:a 1}] 3] [1 [{:a 1 :b 5}] 6]] (vec (inout/var-cases #'padded))))
-    (is (= [[0 [1] 2] [1 [5] 6]] (vec (inout/var-cases #'incremented)))))
+    (is (= [[0 [{:a 1}] 3] [1 [{:a 1 :b 5}] 6]] (vec (core/var-cases #'padded))))
+    (is (= [[0 [1] 2] [1 [5] 6]] (vec (core/var-cases #'incremented)))))
   (testing "check-var runs them"
-    (is (= {:var `padded :cases 2 :failures []} (inout/check-var #'padded)))
-    (is (= {:var `incremented :cases 2 :failures []} (inout/check-var #'incremented)))))
+    (is (= {:var `padded :cases 2 :failures []} (core/check-var #'padded)))
+    (is (= {:var `incremented :cases 2 :failures []} (core/check-var #'incremented)))))
 
 (deftest a-case-that-is-not-a-pair-throws
   (doseq [bad [[[[1] 2 3]] [[[1]]] [[1 2]] [nil] '([[1] 2])]]
-    (let [message (try (inout/register-tests! #'incremented bad) nil
+    (let [message (try (core/register-tests! #'incremented bad) nil
                        (catch :default e (ex-message e)))]
       (is (re-find #"incremented" (str message)) (pr-str bad))))
-  (swap! inout/registry dissoc `incremented))
+  (swap! core/registry dissoc `incremented))
 
 (deftest defn-typed-expansion
   (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
@@ -60,13 +60,13 @@
 (deftest defmeta-expansion
   (testing "defmeta above the defn-typed: :doc goes into the defn at compile time; the registry also keeps it beside the cases (where a plain defn below keeps it)"
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
-    (is (= {:doc "a + b, b defaulting to 2."} (:meta (get @inout/registry `padded))))
-    (is (= {:var `padded :cases 2 :failures []} (inout/check-var #'padded)))))
+    (is (= {:doc "a + b, b defaulting to 2."} (:meta (get @core/registry `padded))))
+    (is (= {:var `padded :cases 2 :failures []} (core/check-var #'padded)))))
 
-(mi/collect! {:ns [inout.core-test]})
+(mi/collect! {:ns [defn-typed.core-test]})
 
 (deftest defn-typed-schema-is-instrumented
-  (mi/instrument! {:filters [(mi/-filter-ns 'inout.core-test)]})
+  (mi/instrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]})
   (try
     (testing "a good call passes (a defaulted key may be absent: its row is :optional), an unknown key is rejected as :malli.core/invalid-input"
       (is (= 3 (padded {:a 1})))
@@ -75,4 +75,4 @@
         (is (= :malli.core/invalid-input (:type data)))
         (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))))
     (finally
-      (mi/unstrument! {:filters [(mi/-filter-ns 'inout.core-test)]}))))
+      (mi/unstrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]}))))

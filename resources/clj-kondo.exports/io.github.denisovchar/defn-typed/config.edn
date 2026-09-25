@@ -1,0 +1,2 @@
+{:hooks {:analyze-call {defn-typed.core/defn-typed hooks.defn-typed/defn-typed
+                        defn-typed.core/defmeta hooks.defn-typed/defmeta}}}

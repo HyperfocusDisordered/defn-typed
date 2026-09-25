@@ -1,4 +1,4 @@
-(ns inout.core
+(ns defn-typed.core
   "Input/output cases and field-table defaults for functions, written next to the function:
 
      (defmeta f
@@ -16,7 +16,7 @@
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]) and
    (defn f {:malli/schema [:=> [:cat f-props] :any]} [m] (let [{:keys [k]} (with-defaults f-props m)] ...)).
    A row with a default is `:optional`: instrumentation checks the call before the defaults are
-   filled. Callers require both unprefixed: (:require [inout.core :refer [defn-typed defmeta]]).
+   filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map
    `{:inout-tests [[[args…] expected] …]}`, keep [[args…] expected] pairs, (= expected (apply f args));
    registered cases win. Works in clj and cljs; this namespace never loads malli: `:malli/schema`
@@ -25,7 +25,7 @@
    - `deftests!` (clj) defines one clojure.test test per such var so run-tests and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
   #?(:clj (:require [clojure.test :as test])
-     :cljs (:require-macros [inout.core])))
+     :cljs (:require-macros [defn-typed.core])))
 
 (defn var-name [v] (symbol v))
 
@@ -37,7 +37,7 @@
                   (vector? pairs) (some #(when-not (pair? %) [%]) pairs)
                   :else [pairs])]
     (when bad
-      (throw (ex-info (str "inout: " sym " cases must be a vector of [[args…] expected] pairs, got "
+      (throw (ex-info (str "defn-typed: " sym " cases must be a vector of [[args…] expected] pairs, got "
                            (pr-str (first bad)))
                       {:var sym :case (first bad)})))))
 
@@ -65,7 +65,7 @@
   [sym pairs]
   (let [bad (if (vector? pairs) (some #(when-not (and (vector? %) (= 2 (count %))) [%]) pairs) [pairs])]
     (when bad
-      (throw (ex-info (str "inout: " sym " defmeta cases must be a vector of [in expected] pairs, got "
+      (throw (ex-info (str "defn-typed: " sym " defmeta cases must be a vector of [in expected] pairs, got "
                            (pr-str (first bad)))
                       {:var sym :case (first bad)})))
     (mapv (fn [[in expected]] [[in] expected]) pairs)))
@@ -286,14 +286,14 @@
           (filter vector? (rest schema))))
 
 ;; qualified: cljs resolves a macro of the ns being compiled only through its ns name
-(inout.core/tests #'with-defaults
+(defn-typed.core/tests #'with-defaults
   [[[[:map [:a {:default 1} :int]] {}]                                  {:a 1}]
    [[[:map [:a {:default 1} :int]] {:a 2}]                              {:a 2}]
    [[[:map [:a {:default 1} [:maybe :int]]] {:a nil}]                   {:a nil}]
    [[[:map [:n [:map [:b {:default "x"} :string]]]] {:n {}}]            {:n {:b "x"}}]
    [[[:map {:closed true} [:a :int] [:b {:optional true} :int]] nil]    {}]])
 
-(inout.core/tests #'defaulted-required-keys
+(defn-typed.core/tests #'defaulted-required-keys
   [[[[:map [:a {:default 1} :int] [:b {:optional true :default 2} :int]]]  [[:a]]]
    [[[:map [:n [:map [:c {:default "x"} :string]]]]]                      [[:n :c]]]
    [[:int]                                                                []]])
@@ -302,7 +302,7 @@
   "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
    of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data. A key
    missing from a call whose row carries `:default` without `:optional` reads defaulted-key-rule.
-   inout carries no malli: the caller passes {:explain malli.core/explain
+   defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
    :error-message malli.error/error-message :form malli.core/form}."
   [{:keys [explain error-message form]} {:keys [type data]}]
   (let [[schema value single-arg?]

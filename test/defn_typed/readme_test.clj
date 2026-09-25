@@ -1,9 +1,9 @@
-(ns inout.readme-test
+(ns defn-typed.readme-test
   "Evaluates README.md's example blocks verbatim (each ```clojure block right after a
    `<!-- readme-test -->` line, in order, the first one's ns form included) and runs the in/out
    cases they declare, so the README examples are code that compiles and passes."
   (:require [clojure.test :refer [deftest is testing]]
-            [inout.core :as inout]))
+            [defn-typed.core :as core]))
 
 (defn readme-examples
   "Texts of README.md's ```clojure blocks marked `<!-- readme-test -->`, in order."
@@ -18,7 +18,7 @@
   (testing "their defmeta cases run against their defn-typed fns"
     (is (= [{:var 'example/fizzbuzz :cases 5 :failures []}
             {:var 'example/invite-token-of :cases 5 :failures []}]
-           (inout/check-ns 'example))))
+           (core/check-ns 'example))))
   (testing "a call reads the rows as locals"
     (is (= "FizzBuzz" ((resolve 'example/fizzbuzz) {:n 30})))
     (is (= "Xy_9-z" ((resolve 'example/invite-token-of) {:url-token nil :start-param "invite-Xy_9-z"})))))

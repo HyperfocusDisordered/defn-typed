@@ -1,5 +1,5 @@
-(ns hooks.inout
-  "clj-kondo hooks for inout.core. defn-typed: rewrites
+(ns hooks.defn-typed
+  "clj-kondo hooks for defn-typed.core. defn-typed: rewrites
    (defn-typed name ^{table-props}? {key schema …} -> <out-schema> body…) into the def + defn it expands to,
    the row keys bound as locals (and `^{:as sym}` on the map as the whole map), so the name, the
    schemas and the body lint like any defn. defmeta
@@ -9,7 +9,7 @@
   (:require [clj-kondo.hooks-api :as api]))
 
 (defn- arg-vector?
-  "Mirrors inout.core/arg-vector?: a vector of binding forms (symbols, destructuring maps)
+  "Mirrors defn-typed.core/arg-vector?: a vector of binding forms (symbols, destructuring maps)
    that holds a destructuring map or is followed by more body."
   [body]
   (let [form (first body)

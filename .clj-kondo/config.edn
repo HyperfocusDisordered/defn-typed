@@ -1,1 +1,1 @@
-{:config-paths ["../resources/clj-kondo.exports/io.github.denisovchar/inout"]}
+{:config-paths ["../resources/clj-kondo.exports/io.github.denisovchar/defn-typed"]}
