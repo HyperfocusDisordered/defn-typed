@@ -167,6 +167,11 @@
       (is (= '(clojure.core/defn f--positional {:no-doc true} [a] a) (nth expansion 3)))
       (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 4) 2))))
       (is (= [] (malli-symbols expansion)))))
+  (testing "a cljs dev build (not :advanced): no call-site macro is interned, so the ns records no :use-macros of its own and shadow-cljs keeps its cache"
+    (let [expansion (@#'defn-typed '(defn-typed h {:a :int} -> :int a) {:ns {:name 'fx1.dev-cljs}}
+                     'h '{:a :int} '-> :int 'a)]
+      (is (= 'do (first expansion)))
+      (is (nil? (find-ns 'fx1.dev-cljs)))))
   (testing "defmeta: in cljs every registration is under goog.DEBUG, so a release build (goog.DEBUG false) drops the cases, the :meta and #'f; in clj it registers at load"
     (let [expand #(@#'defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})
           debug-gated? #(and (seq? %) (= 'clojure.core/when (first %)) (= 'goog.DEBUG (second %)))

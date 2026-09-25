@@ -165,7 +165,7 @@ What is checked where:
   [Checks run in dev/test only](#checks-run-in-devtest-only)): the actual values, ranges
   (`{:price 0}` against `[:int {:min 1}]`), unknown keys of a closed map (`^{:closed true}`), and
   the output. clj-kondo's types carry no ranges and read every map as open.
-- **Compile** (the macro, at every map-literal call, see
+- **Compile** (the macro, at every map-literal call; cljs: release builds, see
   [Compile-time literal checks](#compile-time-literal-checks)): unknown keys of a closed map,
   missing keys, and values that are data against their row schema, ranges included.
 - **Release**: nothing. The types live in `.clj-kondo`, instrumentation only in dev/test.
@@ -335,7 +335,7 @@ walking the schema at every call: 814 ns).
 
 ### Compile-time literal checks
 
-With the switch on or off, a map-literal call is checked where it compiles: an unknown key (of a
+In Clojure, with the switch on or off, a map-literal call is checked where it compiles: an unknown key (of a
 closed map, `^{:closed true}`; `[:map …]` is open), a missing required key (not judged when a key
 is not a keyword literal, `{k 1}`), and each value that is data (a number, string, keyword, boolean, nil, or a
 literal collection of those) against its row schema, ranges included. A mismatch prints one line
@@ -344,6 +344,9 @@ to stderr and the call compiles to the map call; the build goes on:
 ```
 WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
+
+ClojureScript: literal checks and the rewrite run in release (`:advanced`) builds; in dev,
+clj-kondo and malli instrumentation cover the same calls.
 
 Not checked here: a value that is not data, a row schema that cannot be evaluated at compile time
 (in cljs, a schema with a symbol in it), a map that is not a literal. The value check runs only

@@ -367,7 +367,9 @@
      "Makes `name` a macro for the cljs analyzer, beside the fn of that name: interned in the clj
       namespace of the same name (where the analyzer looks up `alias/name` and `ns/name`) and
       recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns). Value
-      position keeps resolving the fn. A clj var of that name that is not such an expander (a
+      position keeps resolving the fn. Called in a release (`:advanced`) build only: a cached
+      analysis holding that `:use-macros` entry needs the clj macro ns, which a fresh JVM lacks, so
+      shadow-cljs recompiles such a ns on every build; a dev build keeps its cache and plain calls. A clj var of that name that is not such an expander (a
       .cljc loaded on the JVM) stays untouched: that fn then has no expander."
      [env fn-name spec]
      (let [ns-sym (-> env :ns :name)
@@ -403,7 +405,7 @@
       through row-value, and `^{:as row}` through with-defaults. Instrumentation checks the call
       before the defaults are filled, so the macro marks a defaulted row `{:optional true}`
       (defaults-optional). Every call site goes through expand-call (clj `:inline`, cljs a macro of
-      the same name): a map literal is checked at compile time, and with the switch on (inline-on?)
+      the same name, release builds only): a map literal is checked at compile time, and with the switch on (inline-on?)
       a fitting literal compiles to the positional call. Its docstring and cases go into `defmeta`
       above it. `:default` in a row's entry props is a compile error."
      [fn-name & more]
@@ -477,7 +479,8 @@
                                                                  :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
                                                                  :file *file* :line (deref clojure.lang.Compiler/LINE)}))))]
          (swap! pending-meta dissoc q)
-         (when cljs? (install-cljs-expander! &env fn-name spec))
+         ;; cljs: a release build only (see install-cljs-expander!); a dev build keeps plain calls
+         (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
          (if positional?
            `(do
               (def ~props ~in-schema)
