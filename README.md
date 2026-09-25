@@ -106,9 +106,7 @@ The smallest one, a single input:
                  [{:n 15} "FizzBuzz"]
                  [{:n 7}  "7"]]})
 
-(defn-typed fizzbuzz {
-  :n :int
-} -> :string
+(defn-typed fizzbuzz {:n :int} -> :string
   (cond (zero? (mod n 15)) "FizzBuzz"
         (zero? (mod n 3))  "Fizz"
         (zero? (mod n 5))  "Buzz"
