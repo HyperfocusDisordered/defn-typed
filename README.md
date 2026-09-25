@@ -64,7 +64,8 @@ then the typed function: plain data, in that order, nothing else.
 Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
 range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
 after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
-nothing is checked at run time, and cljs release builds contain no malli at all. Literal calls such
+nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
+functions in, see malli in production). Literal calls such
 as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
 checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
 see Static checking.
@@ -77,7 +78,8 @@ see Static checking.
 
 The schemas are [malli](https://github.com/metosin/malli) schemas, stored as plain `:malli/schema`
 var metadata. They check calls only where a dev/test/REPL loader runs malli's instrumentation;
-a production build carries them as data and never loads malli. The example pairs run as tests
+a production build carries them as data and never loads malli (unless functions opt in, see
+[malli in production](#malli-in-production)). The example pairs run as tests
 (`check-var`, `check-ns`, `deftests!`).
 
 Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
@@ -168,7 +170,9 @@ What is checked where:
 - **Compile** (the macro, at every map-literal call; cljs: release builds, see
   [Compile-time literal checks](#compile-time-literal-checks)): unknown keys of a closed map,
   missing keys, and values that are data against their row schema, ranges included.
-- **Release**: nothing. The types live in `.clj-kondo`, instrumentation only in dev/test.
+- **Release**: nothing, except the functions you opt in (see
+  [malli in production](#malli-in-production)). The types live in `.clj-kondo`, instrumentation
+  only in dev/test.
 
 Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent this check after every edit.
 
@@ -366,9 +370,73 @@ ClojureScript compiler loads it). Key checks always run.
 - **ClojureScript**: the app calls `malli.dev.cljs/start!` under a dev define; the release build
   aliases it away (`:build-options {:ns-aliases {malli.dev.cljs malli.dev.cljs-noop}}`).
   `defmeta`'s registrations (cases, `:meta`, `#'f`) sit under `goog.DEBUG`, so a release build
-  drops them. The released bundle has no malli code and no cases.
+  drops them. The released bundle has no malli code and no cases, unless the app requires
+  `defn-typed.malli-in-prod`.
 - `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword in the attr-map):
   nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
+
+## malli in production
+
+To keep checking chosen functions in production, add `:malli-in-prod` to their `defmeta`. For
+those functions this is malli instrumentation at run time, in every build. It is not static
+typing: each call's input map and result are validated by malli while the program runs.
+
+```clojure
+(defmeta place-bid
+  {:doc           "Ставка на лот."
+   :inout-tests   [...]
+   :malli-in-prod true})                     ; or {:sample 0.01 :redact #{:phone :token}}
+
+(defn-typed.malli-in-prod/on-malli-violation!
+  (fn [{:keys [fn direction value errors schema stack at repeats]}] ...))
+```
+
+Require `defn-typed.malli-in-prod` once, at the app's entry point (clj and cljs). That brings
+malli into the build and installs the checker. Without the require, an opted-in function runs
+unchecked and prints one line: `:malli-in-prod on <fn> but defn-typed.malli-in-prod is not
+loaded`. A cljs release with no opted-in function and no require has no malli code, as before.
+
+- **What runs**: the input validator and the output validator, compiled once per function. On
+  success nothing else runs and nothing is allocated. On JVM 21 a 3-row function took 21 ns plain
+  and 104 ns checked; its two validators alone took 19 ns. The functions without `:malli-in-prod`
+  are unchanged.
+- **Guarantees**:
+  - the function always returns its normal result;
+  - the check never throws into the caller;
+  - the handler runs off the call path: clj uses one background thread, cljs a 0 ms timeout;
+  - a handler that throws is caught and prints one stderr line, at most once per 60 s.
+- **The event** handed to the handler:
+  - `:fn`, the qualified symbol;
+  - `:direction`, `:input` or `:output`;
+  - `:value`, the map or the result;
+  - `:errors`, as `[{:path :value :message} …]`, where `:message` is malli's humanized text;
+  - `:schema`, the schema's form;
+  - `:stack`, the top frames as text, built only on a violation;
+  - `:at`, epoch ms;
+  - `:repeats`.
+- **Redact**: the keys in `:redact` are removed from `:value` at any depth before the handler
+  sees it. An error whose path goes through such a key carries no `:value`.
+- **Dedupe**: a function reports one event per set of failing paths per 60 s. The violations
+  inside that window are counted into the next event's `:repeats`. No handler registered: each
+  event prints one stderr line, with paths and messages and no values.
+- **Sample**: `:sample 0.01` checks about 1 % of calls, and the other calls run with no check.
+  The draw is `defn-typed.malli-in-prod/*random*`.
+- **Zero-cost calls**: the switch never rewrites an opted-in function's call to the positional
+  call, because every call has to pass through the check.
+- Opted-in functions are `defn-typed` only. A dev loader's instrumentation (which throws) still
+  wraps the same function.
+
+## Validating data with the same schema
+
+`<name>-props` is a plain malli schema. Validate a form or API input with it directly:
+
+```clojure
+(me/humanize (m/explain order-total-props {:price 100 :qty 0}))   ; m = malli.core, me = malli.error
+;; => {:qty ["should be at least 1"]}
+```
+
+Use it for forms and API input. It is the same schema the function's contract uses, and it works
+in clj and in a cljs release build.
 
 ## clj-kondo
 
