@@ -224,3 +224,23 @@
       (is (= "defn-typed f: :a and ^{:as a} both bind a" (error '(defn-typed.core/defn-typed f ^{:as a} {:a :int} -> :any a))))
       (is (= "Map literal must contain an even number of forms"
              (try (read-string "(defn-typed f {:a :int :b} -> :any a)") (catch Exception e (ex-message e))))))))
+
+(deftest cljs-expander-decides-per-compile
+  (testing "a JVM that ran a release (the expander interned) and then compiles in dev: the dev call is the plain call, no check, no rewrite"
+    (let [compiler (atom {:options {:optimizations :advanced}})
+          env {:ns {:name 'n1.shared-jvm}}]
+      (intern (create-ns 'cljs.env) '*compiler* compiler)
+      (try
+        (binding [*ns* (the-ns 'defn-typed.core-test)]
+          (@#'defn-typed '(defn-typed total {:qty [:int {:min 1}]} -> :int qty) env
+           'total '{:qty [:int {:min 1}]} '-> :int 'qty))
+        (let [expander @(ns-resolve 'n1.shared-jvm 'total)
+              form '(total {:qty 0})
+              expand (fn [] (let [err (java.io.StringWriter.)]
+                              [(binding [*err* err] (expander form env {:qty 0})) (str err)]))]
+          (is (re-find #"\(total …\) :qty 0 — should be at least 1" (second (expand))) "release: checked")
+          (swap! compiler assoc-in [:options :optimizations] :none)
+          (is (= [form ""] (expand)) "dev in the same JVM: the plain call, no warning"))
+        (finally
+          (remove-ns 'cljs.env)
+          (remove-ns 'n1.shared-jvm))))))

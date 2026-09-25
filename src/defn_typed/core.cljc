@@ -467,8 +467,10 @@
        (when (or (nil? existing) (::expander (meta existing)))
          (let [cljs-file (resolve 'cljs.analyzer/*cljs-file*)
                v (intern macro-ns (with-meta fn-name {::expander true})
+                         ;; decided per compile: a JVM that ran a release keeps this macro, and its
+                         ;; later dev compiles get the plain call, without checks
                          (fn [form env & args]
-                           (if (= 1 (count args))
+                           (if (and (= 1 (count args)) (inline-on? true))
                              (expand-call {:spec spec :arg (first args) :fallback form :cljs? true
                                            :file (some-> cljs-file deref)
                                            :line (or (:line (meta form)) (:line env))})
