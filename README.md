@@ -279,6 +279,7 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 
 ```clojure
 (do (def name-props [:map [key schema] …])   ; a defaulted row: [key {:optional true} schema]
+    (declare name)                            ; the body may call name
     (defn name--positional [key …] body…)
     (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc … :inline …}
       [m]
