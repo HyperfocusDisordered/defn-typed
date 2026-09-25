@@ -69,7 +69,14 @@
   (loop [i n acc []] (if (pos? i) (recur (dec i) (conj acc i)) acc))
 )
 
+(defn-typed scaled {:x :double} -> :any
+  x
+)
+
 (defn- literal-caller [] (padded {:a 1}))
+
+;; a cljs number literal is a double; in clj `1` is a long, which :double rejects
+#?(:cljs (defn- double-literal-caller [] (scaled {:x 1})))
 
 (deftest defaults-and-nil
   (testing "an absent defaulted row gets its default, an explicit nil stays nil, an optional row reads nil"
@@ -125,6 +132,25 @@
   (testing "switch on: a fitting literal calls the positional fn, so a redefinition of the map fn is not seen; off: it is the map call through the var"
     (with-redefs [padded (constantly :redefined)]
       (is (= (if inline? [1 2 nil] :redefined) (literal-caller))))))
+
+#?(:cljs
+   (deftest cljs-number-literal-call-site
+     (testing "`1` fits a :double row in cljs: the call is rewritten (switch on) like any fitting literal"
+       (with-redefs [scaled (constantly :redefined)]
+         (is (= (if inline? 1 :redefined) (double-literal-caller)))))))
+
+#?(:clj
+   (deftest cljs-number-literal-check
+     (testing "judged as a cljs call, an integer literal fits a :double row; judged as a clj call it does not"
+       (let [spec {:name `scaled :props `scaled-props :rows [{:key :x :index 1 :type :double :required true}]}
+             warnings (fn [cljs?]
+                        (let [err (java.io.StringWriter.)]
+                          (binding [*err* err]
+                            (defn-typed.core/expand-call {:spec spec :arg {:x 1} :fallback :map-call :cljs? cljs?
+                                                          :file "f" :line 1}))
+                          (str err)))]
+         (is (= "" (warnings true)))
+         (is (re-find #"\(scaled …\) :x 1 — should be a double\n$" (warnings false)))))))
 
 #?(:clj
    (deftest call-site-expander

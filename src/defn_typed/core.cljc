@@ -293,20 +293,25 @@
      "Why a map-literal argument does not fit the rows, one text per finding: an unknown key, a
       missing required key, a constant value (data, see constant-form?) its row schema rejects
       (with malli's humanized reason). A row whose schema cannot be evaluated here (clj: the
-      evaluated props; cljs: the source form when it is data) skips the value check."
-     [{:keys [rows]} arg schema-of malli]
-     (let [row-of (into {} (map (juxt :key identity)) rows)]
+      evaluated props; cljs: the source form when it is data) skips the value check. JVM malli
+      judges a cljs literal: a cljs number is a double, so a number it rejects is judged again as
+      one (`1` fits `:double`)."
+     [{:keys [spec arg schema-of malli cljs?]}]
+     (let [row-of (into {} (map (juxt :key identity)) (:rows spec))
+           fits? (fn [schema v]
+                   (or ((:validate malli) schema v)
+                       (and cljs? (number? v) ((:validate malli) schema (double v)))))]
        (concat
         (for [k (keys arg) :when (not (contains? row-of k))]
           (str (pr-str k) " — unknown key"))
-        (for [{:keys [key required]} rows :when (and required (not (contains? arg key)))]
+        (for [{:keys [key required]} (:rows spec) :when (and required (not (contains? arg key)))]
           (str (pr-str key) " — missing required key"))
         (when malli
           (for [[k v] arg
                 :let [row (row-of k)]
                 :when (and row (constant-form? v))
                 :let [reason (try (let [schema (schema-of row)]
-                                    (when (and (some? schema) (not ((:validate malli) schema v)))
+                                    (when (and (some? schema) (not (fits? schema v)))
                                       (let [h ((:humanize malli) ((:explain malli) schema v))]
                                         (if (and (sequential? h) (every? string? h))
                                           (apply str (interpose ", " h))
@@ -341,7 +346,8 @@
                            #(when (constant-form? (:type %)) (:type %))
                            (let [props (some-> (find-var (:props spec)) deref)]
                              #(when props (peek (nth props (:index %))))))
-               mismatches (seq (literal-mismatches spec arg schema-of (malli-check-fns cljs?)))]
+               mismatches (seq (literal-mismatches {:spec spec :arg arg :schema-of schema-of
+                                                    :malli (malli-check-fns cljs?) :cljs? cljs?}))]
            (when mismatches
              (binding [*out* *err*]
                (println (str "WARNING defn-typed " file ":" line ": (" (name (:name spec)) " …) "
