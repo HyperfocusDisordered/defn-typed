@@ -8,4 +8,4 @@
   `undefined-metas`, `forget-ns!`, `deftests!`, `test-ns!`, `test-var!`, `malli-reasons`,
   `malli-fns`, `*trace-cases*`, `with-defaults`; legacy `tests`.
 - clj-kondo hooks exported at `resources/clj-kondo.exports/io.github.denisovchar/inout/`.
-- malli dependency 0.11.0 (oldest release both test suites pass on).
+- malli dependency 0.20.1; tested on 0.11.0 (oldest release both test suites pass on) and 0.20.1.

@@ -194,16 +194,15 @@ the case a blocked eval stopped in.
 The library code calls `malli.core/explain`, `malli.core/form` and `malli.error/error-message`
 (resolved lazily by `malli-fns`), and relies on `:malli/schema` metadata being collected by
 `malli.instrument/collect!` (clj) and on the `:malli.core/invalid-input` /
-`:malli.core/invalid-output` / `:malli.core/missing-key` data. `deps.edn` declares **0.11.0**, the
-oldest release the test suites pass on:
+`:malli.core/invalid-output` / `:malli.core/missing-key` data. `deps.edn` declares **0.20.1**.
+Tested on 0.11.0 and 0.20.1; the oldest release both test suites pass on is **0.11.0**:
 
 - clj: needs 0.9.0 (changelog: "`::m/extra-key` error retains the error value"; the suite fails
   on 0.8.9);
 - cljs: needs 0.11.0 (changelog: "Replace `goog/mixin` with `Object.assign`"; on 0.10.4 current
   ClojureScript instrumentation fails with `goog.mixin is not a function`).
 
-A project that declares a newer malli gets its own version (tools.deps picks the top-level one).
-Tested on 0.11.0 and 0.20.1.
+A project that declares its own malli gets that version (tools.deps picks the top-level one).
 
 ## Tests
 
