@@ -17,7 +17,7 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
 ```clojure
 ;; deps.edn
-{:deps {io.github.hyperfocusdisordered/defn-typed {:local/root "/path/to/defn-typed"}}}
+{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.1.0" :git/sha "ad37092"}}}
 ```
 
 `metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).
