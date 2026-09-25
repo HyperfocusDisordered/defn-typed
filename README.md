@@ -17,7 +17,7 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
 ```clojure
 ;; deps.edn
-{:deps {io.github.denisovchar/defn-typed {:local/root "/path/to/defn-typed"}}}
+{:deps {io.github.hyperfocusdisordered/defn-typed {:local/root "/path/to/defn-typed"}}}
 ```
 
 `metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).
@@ -143,14 +143,14 @@ literal reads as a hash map; the order is cosmetic).
 
 ## clj-kondo
 
-The hooks ship in `resources/clj-kondo.exports/io.github.denisovchar/defn-typed/`. In the consuming
+The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed/`. In the consuming
 project:
 
 ```sh
 clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
 ```
 
-It copies them to `.clj-kondo/imports/io.github.denisovchar/defn-typed/`, which clj-kondo loads with no
+It copies them to `.clj-kondo/imports/io.github.hyperfocusdisordered/defn-typed/`, which clj-kondo loads with no
 further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
 arrow and the body as the `def` + `defn` above, with the row keys as locals, and reports the same
 shape errors as the macro; the `defmeta` hook lints the map as code.

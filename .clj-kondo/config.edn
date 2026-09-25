@@ -1,1 +1,1 @@
-{:config-paths ["../resources/clj-kondo.exports/io.github.denisovchar/defn-typed"]}
+{:config-paths ["../resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed"]}
