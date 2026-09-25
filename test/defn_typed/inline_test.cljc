@@ -47,6 +47,14 @@
   (quot (* price qty (- 100 discount)) 100)
 )
 
+(defn-typed fact {:n :int} -> :int
+  (if (zero? n) 1 (* n (fact {:n (dec n)})))
+)
+
+(defn-typed fact-by-value {:n :int} -> :int
+  (if (zero? n) 1 (* n (let [f fact-by-value] (f {:n (dec n)}))))
+)
+
 (defn- literal-caller [] (padded {:a 1}))
 
 (deftest defaults-and-nil
@@ -69,6 +77,11 @@
     (is (= 8 (via-symbol {:k 8}))))
   (testing "a default written as a call is evaluated once, at the def"
     (is (identical? (boxed {}) (boxed {})))))
+
+(deftest self-call-by-name
+  (testing "the body calls its own function by name, in call position and as a value"
+    (is (= 120 (fact {:n 5})))
+    (is (= 120 (fact-by-value {:n 5})))))
 
 (deftest literals-that-fall-back
   (testing "an unknown key or a missing required key compiles to the map call, with the map call's result"

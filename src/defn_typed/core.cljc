@@ -453,6 +453,8 @@
          (if positional?
            `(do
               (def ~props ~in-schema)
+              ;; the body calls name before its defn: a recursive call, name passed as a value
+              (declare ~fn-name)
               (defn ~positional {:no-doc true} ~locals ~@body)
               (defn ~fn-name ~attrs [~m]
                 (let ~bindings
