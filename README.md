@@ -102,6 +102,10 @@ Step 2 writes `.clj-kondo/imports/metosin/malli-types-clj/config.edn`, which clj
 no further config; it covers functions defined in `.clj` and `.cljc` files. With the hooks alone
 clj-kondo checks the form's shape and the body, not the types of the calls.
 
+In a REPL, `(malli.dev/start!)` does step 2 and instruments; after redefining a function, re-run
+`(malli.instrument/collect! {:ns ['my.app.core]})` to re-emit; `(malli.dev/stop!)` empties the
+types file.
+
 ```clojure
 (order-total {:price "100"})   ; error: Expected: integer, received: string.
 (order-total {:qty 2})         ; error: Missing required key: :price
