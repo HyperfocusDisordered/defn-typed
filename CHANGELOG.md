@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 (2026-09-25)
+
+- First release on Clojars (`io.github.hyperfocusdisordered/defn-typed`); library code unchanged since 0.1.1.
+- Release tooling: `build.clj` (`clojure -T:build jar | deploy`), GitHub Actions CI (clj, cljs, clj-kondo).
+
 ## 0.1.1 (2026-09-25)
 
 - A default = `:default` in the row type's own props, type first: `:qty [:int {:min 1 :default 1}]`

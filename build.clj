@@ -5,7 +5,7 @@
             [deps-deploy.deps-deploy :as dd]))
 
 (def lib 'io.github.hyperfocusdisordered/defn-typed)
-(def version "0.1.1")
+(def version "0.1.2")
 (def class-dir "target/classes")
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
 (def url "https://github.com/HyperfocusDisordered/defn-typed")
