@@ -1,0 +1,2 @@
+{:hooks {:analyze-call {bikes.auction.inout/defnmalli hooks.inout/defnmalli
+                        bikes.auction.inout/defmeta hooks.inout/defmeta}}}
