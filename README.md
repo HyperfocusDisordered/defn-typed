@@ -81,6 +81,72 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
 `metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).
 
+## Static checking
+
+clj-kondo reports wrong calls of `defn-typed` functions once malli has written the functions'
+types into the project's `.clj-kondo` directory. In the consuming project:
+
+```sh
+# 1. the defn-typed hooks (once, and again after upgrading the library)
+mkdir -p .clj-kondo   # clj-kondo copies configs only into an existing config dir
+clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
+
+# 2. the types: load your namespaces, collect their schemas, emit (again after a schema change)
+clojure -M -e "(require 'my.app.core 'malli.instrument 'malli.clj-kondo) (do (malli.instrument/collect! {:ns (all-ns)}) (malli.clj-kondo/emit!))"
+
+# 3. lint as usual
+clj-kondo --lint src
+```
+
+Step 2 writes `.clj-kondo/imports/metosin/malli-types-clj/config.edn`, which clj-kondo loads with
+no further config; it covers functions defined in `.clj` and `.cljc` files. With the hooks alone
+clj-kondo checks the form's shape and the body, not the types of the calls.
+
+```clojure
+(order-total {:price "100"})   ; error: Expected: integer, received: string.
+(order-total {:qty 2})         ; error: Missing required key: :price
+```
+
+Functions defined in `.cljs` files (shadow-cljs): copy the hooks from
+`--lint "$(npx shadow-cljs classpath)"`, and get the types from a small node build that prints
+them with malli's `print-cljs!`:
+
+```clojure
+;; shadow-cljs.edn, under :builds
+:kondo-types {:target :node-script :main my.app.kondo-types/main :output-to "out/kondo-types.js"}
+
+;; src/my/app/kondo_types.cljs
+(ns my.app.kondo-types
+  (:require [my.app.core]               ; every namespace whose functions get types
+            [malli.instrument :as mi]
+            [malli.clj-kondo :as mc]))
+
+(defn main []
+  (mi/collect! {:ns [my.app.core]})     ; a literal list: cljs collects at compile time
+  (mc/print-cljs!))
+```
+
+```sh
+npx shadow-cljs compile kondo-types
+mkdir -p .clj-kondo/imports/metosin/malli-types-cljs
+node out/kondo-types.js > .clj-kondo/imports/metosin/malli-types-cljs/config.edn
+```
+
+What is checked where:
+
+- **Static** (clj-kondo, after step 2), at the call site:
+  - a value of the wrong type in a row: `(order-total {:price "100"})`;
+  - a missing required key: `(order-total {:qty 2})`;
+  - a wrong type inside a nested map row: `(ship {:addr {:zip "x"}})`, `ship`'s row
+    `:addr [:map [:zip :int]]`;
+  - a wrong type through a local: `(let [p "100"] (order-total {:price p}))`;
+  - another typed function's output: `(order-total {:price (label {:n 1})})`, `label` being `-> :string`.
+- **Runtime** (malli instrumentation, dev/test only, see
+  [Checks run in dev/test only](#checks-run-in-devtest-only)): the actual values, ranges
+  (`{:price 0}` against `[:int {:min 1}]`), unknown keys of a closed map (`^{:closed true}`), and
+  the output. clj-kondo's types carry no ranges and read every map as open.
+- **Release**: nothing. The types live in `.clj-kondo`, instrumentation only in dev/test.
+
 ## Example
 
 Read top to bottom: the task, then its inputs and outputs, then the typed function.
@@ -181,8 +247,8 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 - **`:inout-tests`** = `[in out]` pairs, `in` = the function's single argument (the map; or the
   scalar of a one-argument plain `defn`). A case passes iff `(= out (f in))`. A non-pair throws
   naming the var.
-- A docstring, an attr-map or an argument vector inside `defn-typed` is a compile error naming the
-  function. Single arity only.
+- A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
+  a compile error naming the function. Single arity only.
 
 `defn-typed` expands to plain Clojure:
 
@@ -213,15 +279,8 @@ literal reads as a hash map; the order is cosmetic).
 
 ## clj-kondo
 
-The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed/`. In the consuming
-project:
-
-```sh
-mkdir -p .clj-kondo   # clj-kondo copies configs only into an existing config dir
-clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
-```
-
-It copies them to `.clj-kondo/imports/io.github.hyperfocusdisordered/defn-typed/`, which clj-kondo loads with no
+The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed/`; step 1 of
+[Static checking](#static-checking) copies them to `.clj-kondo/imports/io.github.hyperfocusdisordered/defn-typed/`, which clj-kondo loads with no
 further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
 arrow and the body as the `def` + `defn` above, with the row keys as locals, and reports the same
 shape errors as the macro; the `defmeta` hook lints the map as code.
