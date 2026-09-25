@@ -49,7 +49,8 @@
   (let [[fn-name & more] (rest (:children node))
         [doc more] (if (api/string-node? (first more)) [(first more) (rest more)] [nil more])
         arrow? #(and (api/token-node? %) (= '-> (api/sexpr %)))
-        [input [arrow out-schema & body]] (split-with (complement arrow?) more)
+        [input [arrow & after-arrow]] (split-with (complement arrow?) more)
+        [out-schema & body] after-arrow
         table (first input)
         table? (and table (not (next input)) (api/map-node? table))
         finding! #(api/reg-finding! (assoc (meta %1) :message (str "defn-typed: " %2) :type :syntax))
@@ -82,7 +83,9 @@
                      row-nodes)]
     (when doc
       (finding! doc "docstring goes to defmeta"))
-    (when-not arrow
+    (if arrow
+      (when (empty? after-arrow)
+        (finding! arrow "no output schema after ->"))
       (finding! node "expected -> between the input rows and the output schema"))
     (cond
       (nil? table) (finding! node "no input rows between the name and ->")
@@ -103,7 +106,7 @@
                           [(api/map-node [(api/keyword-node :malli/schema)
                                           (api/vector-node [(api/keyword-node :=>)
                                                             (api/vector-node [(api/keyword-node :cat) props])
-                                                            ;; no output schema (-> missing) is reported above; a nil node would abort the file's analysis
+                                                            ;; no output schema (-> missing, or nothing after it) is reported above; a nil node would abort the file's analysis
                                                             (or out-schema (api/keyword-node :any))])])
                            (api/vector-node [m])
                            (api/list-node

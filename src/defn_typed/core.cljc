@@ -231,9 +231,12 @@
                (fail! "the first argument must be the function's name"))
            _ (when (string? (first more))
                (fail! "docstring goes to defmeta"))
-           [input [arrow out-schema & body]] (split-with #(not= '-> %) more)]
+           [input [arrow & after-arrow]] (split-with #(not= '-> %) more)
+           [out-schema & body] after-arrow]
        (when-not (= '-> arrow)
          (fail! "expected -> between the input rows and the output schema"))
+       (when (empty? after-arrow)
+         (fail! "no output schema after ->"))
        (when (empty? input)
          (fail! "no input rows between the name and ->"))
        (when (arg-vector? body)

@@ -70,7 +70,7 @@
   (testing "defaults come from the row type's own props; the absent key is filled"
     (is (= 3 (padded {:a 1})))
     (is (= 6 (padded {:a 1 :b 5}))))
-  (testing "a docstring, an input that is not one map (a vector, [:map …], a symbol, two forms), no rows, a non-keyword key, a bad [props schema], :default in a row's entry props (nested included), an argument vector, or a missing ->, fails at compile time naming the fn"
+  (testing "a docstring, an input that is not one map (a vector, [:map …], a symbol, two forms), no rows, a non-keyword key, a bad [props schema], :default in a row's entry props (nested included), an argument vector, a missing ->, or nothing after ->, fails at compile time naming the fn"
     (doseq [[form message] [['(defn-typed.core/defn-typed f "doc" {:a :int} -> :any a) #"docstring goes to defmeta"]
                             ['(defn-typed.core/defn-typed f [[:a :int]] -> :any a) #"the input is a map: \{key schema …\}"]
                             ['(defn-typed.core/defn-typed f [:map [:a :int]] -> :any a) #"the input is a map"]
@@ -85,7 +85,8 @@
                             ['(defn-typed.core/defn-typed f {:a [{:default 1} :int] :n [:map [:c {:default 2} :int]]} -> :any a) #":a, :n :c · put :default into the schema's props"]
                             ['(defn-typed.core/defn-typed f {:a :int} -> :any [{:keys [a]}] a) #"args are bound from the rows"]
                             ['(defn-typed.core/defn-typed f {:a :int} -> :any [m] m) #"args are bound from the rows"]
-                            ['(defn-typed.core/defn-typed f {:a :int} => :any a) #"expected ->"]]]
+                            ['(defn-typed.core/defn-typed f {:a :int} => :any a) #"expected ->"]
+                            ['(defn-typed.core/defn-typed f {:a :int} ->) #"no output schema after ->"]]]
       (is (re-find (re-pattern (str "^defn-typed f: .*" message))
                    (try (pr-str (macroexpand-1 form))
                         (catch Exception e (ex-message (or (ex-cause e) e)))))
