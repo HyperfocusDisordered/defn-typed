@@ -151,6 +151,8 @@ What is checked where:
   the output. clj-kondo's types carry no ranges and read every map as open.
 - **Release**: nothing. The types live in `.clj-kondo`, instrumentation only in dev/test.
 
+Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent this check after every edit.
+
 ## Example
 
 Read top to bottom: the task, then its inputs and outputs, then the typed function.
