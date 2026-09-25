@@ -80,6 +80,25 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
 ```clojure
 (ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
 
+(defmeta order-total
+  {:doc "Order total: price × qty, minus a percent discount."
+   :inout-tests [[{:price 100}                      100]
+                 [{:price 100 :qty 3}               300]
+                 [{:price 100 :qty 3 :discount 10}  270]]})
+
+(defn-typed order-total {
+  :price    pos-int?
+  :qty      [{:optional true :default 1} pos-int?]
+  :discount [{:optional true :default 0} [:int {:min 0 :max 100}]]
+} -> :int
+
+  (quot (* price qty (- 100 discount)) 100))
+```
+
+The smallest one, a single input:
+
+<!-- readme-test -->
+```clojure
 (defmeta fizzbuzz
   {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
    :inout-tests [[{:n 1}  "1"]
@@ -96,25 +115,6 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
         (zero? (mod n 3))  "Fizz"
         (zero? (mod n 5))  "Buzz"
         :else              (str n)))
-```
-
-Named inputs, defaults and a range:
-
-<!-- readme-test -->
-```clojure
-(defmeta order-total
-  {:doc "Order total: price × qty, minus a percent discount."
-   :inout-tests [[{:price 100}                      100]
-                 [{:price 100 :qty 3}               300]
-                 [{:price 100 :qty 3 :discount 10}  270]]})
-
-(defn-typed order-total {
-  :price    pos-int?
-  :qty      [{:optional true :default 1} pos-int?]
-  :discount [{:optional true :default 0} [:int {:min 0 :max 100}]]
-} -> :int
-
-  (quot (* price qty (- 100 discount)) 100))
 ```
 
 A real one, from the app this library was extracted from:
