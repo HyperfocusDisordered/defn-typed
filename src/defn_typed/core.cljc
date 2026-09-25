@@ -116,29 +116,34 @@
   [spec]
   (atom {:spec spec}))
 
+(defn- build-malli-checker!
+  "malli-checker's first-call path: builds slot's checker with malli-checker-builder once it is set;
+   nil while it is not (one stderr line per function) or when building failed (one stderr line)."
+  [slot {:keys [spec warned failed]}]
+  (if-let [build @malli-checker-builder]
+    (when-not failed
+      (try (let [built (build spec)]
+             (swap! slot assoc :checker built)
+             built)
+           (catch #?(:clj Throwable :cljs :default) e
+             (swap! slot assoc :failed true)
+             (print-err! (str "defn-typed: :malli-in-prod on " (:fn spec) " is off, its schemas did not compile: "
+                              (ex-message e)))
+             nil)))
+    (do (when-not warned
+          (swap! slot assoc :warned true)
+          (print-err! (str "defn-typed: :malli-in-prod on " (:fn spec)
+                           " but defn-typed.malli-in-prod is not loaded")))
+        nil)))
+
 (defn malli-checker
   "slot's checker, built by malli-checker-builder on the first call made once it is set, which
    compiles the validators once per function. nil while `defn-typed.malli-in-prod` is not loaded
    (one stderr line per function) or when building failed (one stderr line): the call then runs
    unchecked."
   [slot]
-  (let [{:keys [checker spec warned failed]} @slot]
-    (or checker
-        (if-let [build @malli-checker-builder]
-          (when-not failed
-            (try (let [built (build spec)]
-                   (swap! slot assoc :checker built)
-                   built)
-                 (catch #?(:clj Throwable :cljs :default) e
-                   (swap! slot assoc :failed true)
-                   (print-err! (str "defn-typed: :malli-in-prod on " (:fn spec) " is off, its schemas did not compile: "
-                                    (ex-message e)))
-                   nil)))
-          (do (when-not warned
-                (swap! slot assoc :warned true)
-                (print-err! (str "defn-typed: :malli-in-prod on " (:fn spec)
-                                 " but defn-typed.malli-in-prod is not loaded")))
-              nil)))))
+  (let [state @slot]
+    (or (:checker state) (build-malli-checker! slot state))))
 
 (defn malli-check?
   "Whether this call of a `:malli-in-prod` function is checked: a checker, and no `:sample` or the
