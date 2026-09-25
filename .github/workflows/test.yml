@@ -25,6 +25,7 @@ jobs:
           key: ${{ github.job }}-deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'shadow-cljs.edn') }}
           restore-keys: ${{ github.job }}-deps-${{ runner.os }}-
       - run: clojure -M:test
+      - run: clojure -J-Ddefn-typed.inline=true -M:test
 
   cljs:
     runs-on: ubuntu-latest
@@ -46,6 +47,7 @@ jobs:
           key: ${{ github.job }}-deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'shadow-cljs.edn') }}
           restore-keys: ${{ github.job }}-deps-${{ runner.os }}-
       - run: clojure -M:cljs compile test && node out/node-tests.js
+      - run: clojure -M:cljs release inline && node out/inline-tests.js
 
   clj-kondo:
     runs-on: ubuntu-latest

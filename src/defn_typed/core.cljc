@@ -13,8 +13,9 @@
 
    `defmeta` (above f) expands to (declare f) + the registration of its cases and keys, and leaves
    its map for the defn-typed below, which puts :doc and the other keys into f's attr-map.
-   `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]) and
-   (defn f {:malli/schema [:=> [:cat f-props] :any]} [m] (let [{:keys [k]} (with-defaults f-props m)] ...)).
+   `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]),
+   (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]} [m]
+   (let [{:keys [k] :or {k 1}} m] (f--positional k))); every call site goes through expand-call.
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map

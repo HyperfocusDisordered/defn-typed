@@ -153,6 +153,9 @@ What is checked where:
   [Checks run in dev/test only](#checks-run-in-devtest-only)): the actual values, ranges
   (`{:price 0}` against `[:int {:min 1}]`), unknown keys of a closed map (`^{:closed true}`), and
   the output. clj-kondo's types carry no ranges and read every map as open.
+- **Compile** (the macro, at every map-literal call, see
+  [Compile-time literal checks](#compile-time-literal-checks)): unknown and missing keys, and
+  values that are data against their row schema, ranges included.
 - **Release**: nothing. The types live in `.clj-kondo`, instrumentation only in dev/test.
 
 Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent this check after every edit.
@@ -264,15 +267,72 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 
 ```clojure
 (do (def name-props [:map [key schema] …])   ; a defaulted row: [key {:optional true} schema]
-    (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc …}
+    (defn name--positional [key …] body…)
+    (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc … :inline …}
       [m]
-      (let [{:keys [key …]} (defn-typed.core/with-defaults name-props m)]
-        body…)))
+      (let [{:keys [key …] :or {key default …}} m]
+        (name--positional key …))))
 ```
 
 so clj-kondo (with the exported hooks), malli's `collect!`/`instrument!`, `:arglists` and any
-tool that reads a `defn` see a `defn`. `<name>-props` keeps entry order up to 8 rows (a larger map
-literal reads as a hash map; the order is cosmetic).
+tool that reads a `defn` see a `defn`. The defaults are the `:or` of the destructuring, taken from
+the rows when the macro expands. With `^{:as row}` the map goes through
+`defn-typed.core/with-defaults` (the whole filled map is bound); a row whose defaults only the
+evaluated schema shows (a symbol as its type, `:frame frame`, or a `[:map …]` row with defaults
+inside) is read at call time. `<name>-props` keeps entry order up to 8 rows (a larger map literal
+reads as a hash map; the order is cosmetic).
+
+## Zero-cost calls
+
+The body lives in `<name>--positional`, whose parameters are the rows in entry order; `<name>`
+destructures the map and calls it. With the switch on, a call whose argument is a map literal
+compiles straight to the positional call:
+
+```clojure
+(order-total {:price p :qty 3})
+;; compiles to
+(let [price__1 p qty__2 3] (order-total--positional price__1 qty__2 0))
+```
+
+The values are evaluated in the literal's order, as the map call evaluates them; an absent row
+gets its default. Every other call is the map call: a map that is not a literal, a literal with an
+unknown key or without a required key, a literal that fails the checks below, `apply` and
+higher-order uses, and every call of a function with `^{:as row}` or with a row read at call time.
+
+The switch:
+
+- **Clojure**: the JVM system property `defn-typed.inline=true` while the calling code compiles
+  (`clojure -J-Ddefn-typed.inline=true …`, `:jvm-opts ["-Ddefn-typed.inline=true"]`). Every direct
+  call is covered, `:refer`red ones included (the function's `:inline`).
+- **ClojureScript**: on in a release build (`:optimizations :advanced`). Calls through an alias
+  (`c/order-total`), a qualified name, or inside the defining namespace are covered; a `:refer`red
+  call from another namespace stays the map call (clj-kondo and dev instrumentation still check
+  it). In the release JS such a call builds no map: `(c/order-total {:price p :qty 3})` came out
+  as `quot(300 * p, 100)`.
+
+Off everywhere else: dev, REPL, tests. A rewritten call skips the var, so instrumentation would not
+see it and a redefinition in the REPL would not reach it; with the switch off every call goes
+through the var.
+
+A 3-row function with 2 defaults, `(total {:price p :qty 3})`, criterium `quick-bench` on JVM 21:
+positional `defn` 36 ns, switch off 51 ns, switch on 28 ns (0.1.4, which filled the defaults by
+walking the schema at every call: 814 ns).
+
+### Compile-time literal checks
+
+With the switch on or off, a map-literal call is checked where it compiles: an unknown key, a
+missing required key, and each value that is data (a number, string, keyword, boolean, nil, or a
+literal collection of those) against its row schema, ranges included. A mismatch prints one line
+to stderr and the call compiles to the map call; the build goes on:
+
+```
+WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at least 1
+```
+
+Not checked here: a value that is not data, a row schema that cannot be evaluated at compile time
+(in cljs, a schema with a symbol in it), a map that is not a literal. The value check needs malli:
+dev compiles load it; a Clojure release with the switch on checks values only if malli is already
+loaded. Key checks always run.
 
 ## Checks run in dev/test only
 
@@ -333,7 +393,9 @@ A project that declares its own malli gets that version (tools.deps picks the to
 
 ```sh
 clojure -M:test                                     # clj
+clojure -J-Ddefn-typed.inline=true -M:test          # clj, switch on
 clojure -M:cljs compile test && node out/node-tests.js   # cljs (shadow-cljs :node-test)
+clojure -M:cljs release inline && node out/inline-tests.js   # cljs release, switch on
 clj-kondo --lint src test                            # uses the exported hooks
 ```
 
