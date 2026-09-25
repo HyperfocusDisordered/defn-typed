@@ -70,7 +70,7 @@ A real one, from the app this library was extracted from:
       (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param "")))))
 ```
 
-Both blocks run as a test (`test/core/readme_test.clj` evaluates them verbatim).
+Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
 
 ## Grammar
 
@@ -139,7 +139,7 @@ literal reads as a hash map; the order is cosmetic).
   `defmeta`'s registrations (cases, `:meta`, `#'f`) sit under `goog.DEBUG`, so a release build
   drops them. The released bundle has no malli code and no cases.
 - `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword in the attr-map):
-  nothing it emits loads malli. `test/core/core_test.clj` `release-form` asserts this.
+  nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
 
 ## clj-kondo
 
