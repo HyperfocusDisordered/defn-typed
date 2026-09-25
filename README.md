@@ -4,7 +4,8 @@
 [![Clojars Project](https://img.shields.io/clojars/v/io.github.hyperfocusdisordered/defn-typed.svg)](https://clojars.org/io.github.hyperfocusdisordered/defn-typed)
 [![cljdoc badge](https://cljdoc.org/badge/io.github.hyperfocusdisordered/defn-typed)](https://cljdoc.org/d/io.github.hyperfocusdisordered/defn-typed)
 
-A function's input/output contract and its examples, written next to the function.
+Typed functions for Clojure: one signature gives you static checks, runtime contracts,
+compile-time literal checks and example tests, and a call costs what a positional call costs.
 
 ## Why
 
@@ -37,11 +38,20 @@ def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 ```
 
 Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
-ways to get there have an API no human wants to read next to their code.
-[malli](https://github.com/metosin/malli) already solves the hard part (schemas, validation,
-readable errors, instrumentation), so this library only changes how you write it down. What the
-function does, then example inputs and outputs, then the typed function: plain data, in that
-order, nothing else.
+ways to get there have an API no human wants to read next to their code. defn-typed gives you that
+shape, and builds everything else from the one signature:
+
+- **static checks**: clj-kondo flags wrong keys and types as you type (see Static checking);
+- **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
+  during the build (see Compile-time literal checks);
+- **runtime contracts**: every call is checked in the REPL and in tests;
+- **example tests**: the `[in out]` pairs above the function run as tests;
+- **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
+  as a plain `defn` (see Zero-cost calls).
+
+The schemas are [malli](https://github.com/metosin/malli) schemas: malli does the validation, the
+error messages and the instrumentation. What the function does, then example inputs and outputs,
+then the typed function: plain data, in that order, nothing else.
 
 ```clojure
 (defn-typed order-total {
