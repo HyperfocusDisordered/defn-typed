@@ -53,9 +53,11 @@ order, nothing else.
 
 Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
 range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
-after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Uninstrumented code
-checks nothing, and cljs release builds contain no malli at all. clj-kondo checks keys and types
-(not the range) as you type, once the types are emitted — see Static checking.
+after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
+nothing is checked at run time, and cljs release builds contain no malli at all. Literal calls such
+as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
+checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
+see Static checking.
 
 ## Forms
 
