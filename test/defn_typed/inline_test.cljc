@@ -69,6 +69,10 @@
   (loop [i n acc []] (if (pos? i) (recur (dec i) (conj acc i)) acc))
 )
 
+(defn-typed closed-pair ^{:closed true} {:a :int :b [:int {:max 9 :default 1}]} -> :any
+  [a b]
+)
+
 (defn-typed scaled {:x :double} -> :any
   x
 )
@@ -158,7 +162,10 @@
        (let [form ((:inline (meta #'padded)) '{:a 1})]
          (if inline?
            (is (= `padded--positional (first (last form))))
-           (is (= ['.invoke `padded {:a 1}] (vec form))))))))
+           (is (= ['.invoke `padded {:a 1}] (vec form))))))
+     (testing "a key beyond the rows, or one that is not a keyword literal: the map call, switch on or off"
+       (is (= ['.invoke `padded '{:a 1 :zz 2}] (vec ((:inline (meta #'padded)) '{:a 1 :zz 2}))))
+       (is (= ['.invoke `padded '{k 1}] (vec ((:inline (meta #'padded)) '{k 1})))))))
 
 #?(:clj
    (defn- compile-warnings
@@ -174,14 +181,20 @@
      (testing "a literal with an unknown key, a missing required key, or a constant value its row rejects prints one warning; the call still compiles to the map call"
        (is (re-find #"^WARNING defn-typed .*: \(order-total …\) :qty 0 — should be at least 1\n$"
                     (compile-warnings '(order-total {:price 100 :qty 0}))))
-       (is (re-find #"\(order-total …\) :zz — unknown key\n$"
-                    (compile-warnings '(order-total {:price 100 :zz 1}))))
+       (is (re-find #"\(closed-pair …\) :zz — unknown key\n$"
+                    (compile-warnings '(closed-pair {:a 1 :zz 1}))))
        (is (re-find #"\(order-total …\) :price — missing required key\n$"
                     (compile-warnings '(order-total {:qty 2}))))
        (is (re-find #"\(order-total …\) :price \"100\" — should be an integer\n$"
                     (compile-warnings '(order-total {:price "100"}))))
-       (is (re-find #"\(order-total …\) :zz — unknown key; :price — missing required key; :discount 101 — should be at most 100\n$"
+       (is (re-find #"\(closed-pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9\n$"
+                    (compile-warnings '(closed-pair {:zz 1 :b 10}))))
+       (is (re-find #"\(order-total …\) :price — missing required key; :discount 101 — should be at most 100\n$"
                     (compile-warnings '(order-total {:zz 1 :discount 101})))))
+     (testing "an open input map takes keys beyond the rows; a key that is not a keyword literal may be any key"
+       (is (= "" (compile-warnings '(order-total {:price 100 :zz 1}))))
+       (is (= "" (compile-warnings '(whole {:a 1 :z 3}))))
+       (is (= "" (compile-warnings '(let [k :price] (order-total {k 100}))))))
      (testing "a fitting literal, a non-constant value, and a map that is not a literal print nothing"
        (is (= "" (compile-warnings '(order-total {:price 100 :qty 2}))))
        (is (= "" (compile-warnings '(let [q 0] (order-total {:price 100 :qty q})))))

@@ -290,8 +290,9 @@
 
 #?(:clj
    (defn- literal-mismatches
-     "Why a map-literal argument does not fit the rows, one text per finding: an unknown key, a
-      missing required key, a constant value (data, see constant-form?) its row schema rejects
+     "Why a map-literal argument does not fit the rows, one text per finding: an unknown key (a
+      closed input map only: `[:map …]` is open), a missing required key (not judged when a key is
+      not a keyword literal: `{k 1}` may hold any key), a constant value (data, see constant-form?) its row schema rejects
       (with malli's humanized reason). A row whose schema cannot be evaluated here (clj: the
       evaluated props; cljs: the source form when it is data) skips the value check. JVM malli
       judges a cljs literal: a cljs number is a double, so a number it rejects is judged again as
@@ -302,10 +303,12 @@
                    (or ((:validate malli) schema v)
                        (and cljs? (number? v) ((:validate malli) schema (double v)))))]
        (concat
-        (for [k (keys arg) :when (not (contains? row-of k))]
-          (str (pr-str k) " — unknown key"))
-        (for [{:keys [key required]} (:rows spec) :when (and required (not (contains? arg key)))]
-          (str (pr-str key) " — missing required key"))
+        (when (:closed spec)
+          (for [k (keys arg) :when (and (keyword? k) (not (contains? row-of k)))]
+            (str (pr-str k) " — unknown key")))
+        (when (every? keyword? (keys arg))
+          (for [{:keys [key required]} (:rows spec) :when (and required (not (contains? arg key)))]
+            (str (pr-str key) " — missing required key")))
         (when malli
           (for [[k v] arg
                 :let [row (row-of k)]
@@ -352,7 +355,9 @@
              (binding [*out* *err*]
                (println (str "WARNING defn-typed " file ":" line ": (" (name (:name spec)) " …) "
                              (apply str (interpose "; " mismatches))))))
-           (if (and inline? (not mismatches) (:positional spec))
+           (if (and inline? (not mismatches) (:positional spec)
+                    ;; a key beyond the rows (open map) or not a keyword literal: the map call
+                    (every? (set (map :key (:rows spec))) (keys arg)))
              (literal-call spec arg)
              fallback)))
        (catch Exception _ fallback))))
@@ -456,7 +461,7 @@
                                m]
                               (mapcat #(vector (:local %) `(row-value (nth ~props ~(:index %)) ~m))
                                       (filter :runtime rows))))
-             spec (cond-> {:name q :props q-props
+             spec (cond-> {:name q :props q-props :closed (true? (:closed (schema-props in-schema)))
                            :rows (mapv #(select-keys % [:key :index :type :absent :required]) rows)}
                     (and positional? (not whole) (not-any? :runtime rows))
                     (assoc :positional (qualified &env positional)))
