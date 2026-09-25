@@ -1,21 +1,20 @@
-(ns bikes.auction.inout-test
-  "Runs the in/out cases written next to their functions: one `<fn>-inout` test per function
-   with cases, for every namespace of the source tree the dev loader loads (contracts/
-   source-namespaces), so a namespace that gains cases is in this suite without being listed.
-   Below them: the pair format itself and what `defnmalli` and `defmeta` expand to."
-  (:require [bikes.auction.contracts :as contracts]
-            [bikes.auction.inout :as inout :refer [defnmalli defmeta]]
+(ns inout.core-test
+  "Runs the in/out cases written next to inout.core's own functions (one `<fn>-inout` test per
+   function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
+   expand to, and their release form."
+  (:require [inout.core :as inout :refer [defn-typed defmeta]]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [malli.instrument :as mi]))
 
-(run! inout/deftests! (contracts/source-namespaces))
+(inout/deftests! 'inout.core)
 
 (defmeta padded
   {:doc "a + b, b defaulting to 2."
    :inout-tests [[{:a 1}      3]
                  [{:a 1 :b 5} 6]]})
 
-(defnmalli padded
+(defn-typed padded
   ^{:closed true}
   {:a :int
    :b [{:optional true :default 2} :int]} -> :int
@@ -45,54 +44,54 @@
   (inout/register-tests! #'incremented [[[1] 2]])
   (swap! inout/registry dissoc `incremented))
 
-(deftest defnmalli-expansion
+(deftest defn-typed-expansion
   (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
     (is (= [:map {:closed true} [:a :int] [:b {:optional true :default 2} :int]] padded-props))
     (is (= [:=> [:cat padded-props] :int] (:malli/schema (meta #'padded))))
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
     (is (= [1] (map count (:arglists (meta #'padded))))))
   (testing "a map without metadata turns into a bare [:map …] in entry order; `key [props schema]` is a row with props; every row key is a local, a qualified key by its name"
-    (let [expansion (macroexpand-1 '(bikes.auction.inout/defnmalli f {:a :int :x/b [{:optional true} :int]} -> :any [a b]))]
+    (let [expansion (macroexpand-1 '(inout.core/defn-typed f {:a :int :x/b [{:optional true} :int]} -> :any [a b]))]
       (is (= '(def f-props [:map [:a :int] [:x/b {:optional true} :int]]) (second expansion)))
       (is (= '{:keys [a x/b]} (first (second (last (last expansion))))))))
   (testing "a value vector not led by a map is the row's schema"
     (is (= '(def f-props [:map [:a [:maybe :int]]])
-           (second (macroexpand-1 '(bikes.auction.inout/defnmalli f {:a [:maybe :int]} -> :any a))))))
+           (second (macroexpand-1 '(inout.core/defn-typed f {:a [:maybe :int]} -> :any a))))))
   (testing "a vector returned as the value is the body, not an argument vector"
-    (is (some? (macroexpand-1 '(bikes.auction.inout/defnmalli f {:a :int} -> :any [:div a]))))
-    (is (some? (macroexpand-1 '(bikes.auction.inout/defnmalli f {:a :int} -> :any [comp {:x a}])))))
+    (is (some? (macroexpand-1 '(inout.core/defn-typed f {:a :int} -> :any [:div a]))))
+    (is (some? (macroexpand-1 '(inout.core/defn-typed f {:a :int} -> :any [comp {:x a}])))))
   (testing "defaults come from the table"
     (is (= 3 (padded {:a 1})))
     (is (= 6 (padded {:a 1 :b 5}))))
   (testing "a docstring, an input that is not one map (a vector, [:map …], a symbol, two forms), no rows, a non-keyword key, a bad [props schema], an argument vector, or a missing ->, fails at compile time naming the fn"
-    (doseq [[form message] [['(bikes.auction.inout/defnmalli f "doc" {:a :int} -> :any a) #"docstring goes to defmeta"]
-                            ['(bikes.auction.inout/defnmalli f [[:a :int]] -> :any a) #"the input is a map: \{key schema …\}"]
-                            ['(bikes.auction.inout/defnmalli f [:map [:a :int]] -> :any a) #"the input is a map"]
-                            ['(bikes.auction.inout/defnmalli f some-props -> :any a) #"the input is a map"]
-                            ['(bikes.auction.inout/defnmalli f {:a :int} {:b :int} -> :any a) #"the input is a map"]
-                            ['(bikes.auction.inout/defnmalli f -> :any a) #"no input rows"]
-                            ['(bikes.auction.inout/defnmalli f {} -> :any a) #"no input rows in the map"]
-                            ['(bikes.auction.inout/defnmalli f ^{:closed true} {} -> :any a) #"no input rows in the map"]
-                            ['(bikes.auction.inout/defnmalli f {"a" :int} -> :any a) #"a key of the input map is a keyword, got \"a\""]
-                            ['(bikes.auction.inout/defnmalli f {:a [{:optional true}]} -> :any a) #"a row with props is :a \[props schema\]"]
-                            ['(bikes.auction.inout/defnmalli f {:a :int} -> :any [{:keys [a]}] a) #"args are bound from the rows"]
-                            ['(bikes.auction.inout/defnmalli f {:a :int} -> :any [m] m) #"args are bound from the rows"]
-                            ['(bikes.auction.inout/defnmalli f {:a :int} => :any a) #"expected ->"]]]
-      (is (re-find (re-pattern (str "^defnmalli f: .*" message))
+    (doseq [[form message] [['(inout.core/defn-typed f "doc" {:a :int} -> :any a) #"docstring goes to defmeta"]
+                            ['(inout.core/defn-typed f [[:a :int]] -> :any a) #"the input is a map: \{key schema …\}"]
+                            ['(inout.core/defn-typed f [:map [:a :int]] -> :any a) #"the input is a map"]
+                            ['(inout.core/defn-typed f some-props -> :any a) #"the input is a map"]
+                            ['(inout.core/defn-typed f {:a :int} {:b :int} -> :any a) #"the input is a map"]
+                            ['(inout.core/defn-typed f -> :any a) #"no input rows"]
+                            ['(inout.core/defn-typed f {} -> :any a) #"no input rows in the map"]
+                            ['(inout.core/defn-typed f ^{:closed true} {} -> :any a) #"no input rows in the map"]
+                            ['(inout.core/defn-typed f {"a" :int} -> :any a) #"a key of the input map is a keyword, got \"a\""]
+                            ['(inout.core/defn-typed f {:a [{:optional true}]} -> :any a) #"a row with props is :a \[props schema\]"]
+                            ['(inout.core/defn-typed f {:a :int} -> :any [{:keys [a]}] a) #"args are bound from the rows"]
+                            ['(inout.core/defn-typed f {:a :int} -> :any [m] m) #"args are bound from the rows"]
+                            ['(inout.core/defn-typed f {:a :int} => :any a) #"expected ->"]]]
+      (is (re-find (re-pattern (str "^defn-typed f: .*" message))
                    (try (pr-str (macroexpand-1 form))
                         (catch Exception e (ex-message (or (ex-cause e) e)))))
           (pr-str form)))))
 
 (deftest defmeta-expansion
-  (testing "defmeta above the defnmalli: :doc and the other keys are var metadata, the [in expected] pairs are the registered cases"
+  (testing "defmeta above the defn-typed: :doc and the other keys are var metadata, the [in expected] pairs are the registered cases"
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
     (is (not (contains? (meta #'padded) :inout-tests)))
     (is (= {:var `padded :cases 2 :failures []} (inout/check-var #'padded))))
   (testing "defmeta declares the name, so it precedes the definition"
-    (is (= '(clojure.core/declare later) (second (macroexpand-1 '(bikes.auction.inout/defmeta later {:doc "x"}))))))
+    (is (= '(clojure.core/declare later) (second (macroexpand-1 '(inout.core/defmeta later {:doc "x"}))))))
   (testing "a non-map fails at compile time naming the fn"
     (is (re-find #"^defmeta padded: the metadata must be a map literal"
-                 (try (pr-str (macroexpand-1 '(bikes.auction.inout/defmeta padded [:doc "x"])))
+                 (try (pr-str (macroexpand-1 '(inout.core/defmeta padded [:doc "x"])))
                       (catch Exception e (ex-message (or (ex-cause e) e)))))))
   (testing "a pair is [in expected]: in is the one argument, a vector in included; anything else throws naming the var"
     (is (= [[[{:a 1}] 3] [[[1 2]] 3]] (inout/single-arg-pairs `padded [[{:a 1} 3] [[1 2] 3]])))
@@ -102,15 +101,65 @@
                         (catch Exception e (ex-message e))))
           (pr-str bad)))))
 
-(deftest defnmalli-schema-is-instrumented
-  (mi/collect! {:ns ['bikes.auction.inout-test]})
-  (mi/instrument! {:filters [(mi/-filter-ns 'bikes.auction.inout-test)]})
+(deftest defn-typed-schema-is-instrumented
+  (mi/collect! {:ns ['inout.core-test]})
+  (mi/instrument! {:filters [(mi/-filter-ns 'inout.core-test)]})
   (try
     (testing "a good call passes (a defaulted key may be absent: its row is :optional), an unknown key is rejected as :malli.core/invalid-input"
       (is (= 3 (padded {:a 1})))
       (let [data (try (padded {:a 1 :c 3}) nil
                       (catch clojure.lang.ExceptionInfo e (assoc (ex-data e) :message (ex-message e))))]
         (is (= :malli.core/invalid-input (:type data)))
-        (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))))
+        (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))
+        (testing "malli-reasons: one `<key path> · <message> · got <value>` line per failing key"
+          (is (= [":c · disallowed key · got 3"] (inout/malli-reasons (inout/malli-fns) data))))))
     (finally
-      (mi/unstrument! {:filters [(mi/-filter-ns 'bikes.auction.inout-test)]}))))
+      (mi/unstrument! {:filters [(mi/-filter-ns 'inout.core-test)]}))))
+
+(deftest check-api
+  (testing "check-ns = check-var over a namespace's registered vars and its vars carrying cases"
+    (is (= {`incremented 2 `padded 2}
+           (into {} (map (juxt :var :cases)) (inout/check-ns 'inout.core-test)))))
+  (testing "registered-vars lists what defmeta registered; undefined-metas names a defmeta nothing defined"
+    (is (some #{#'padded} (inout/registered-vars 'inout.core-test)))
+    (binding [*ns* (the-ns 'inout.core-test)]
+      (eval '(inout.core/defmeta nowhere {:doc "x"})))
+    (try
+      (is (= ['inout.core-test/nowhere] (vec (inout/undefined-metas 'inout.core-test))))
+      (finally
+        (swap! inout/registry dissoc 'inout.core-test/nowhere)
+        (ns-unmap 'inout.core-test 'nowhere))))
+  (testing "forget-ns! drops a namespace's cases, the registered ones and the attr-map ones"
+    (binding [*ns* (create-ns 'inout.scratch)]
+      (refer-clojure)
+      (eval '(do (inout.core/defmeta one {:inout-tests [[1 2]]})
+
+                 (defn one [n] (inc n))
+                 (defn two {:inout-tests [[[1] 2]]} [n] (inc n)))))
+    (try
+      (is (= [1 1] (mapv :cases (inout/check-ns 'inout.scratch))))
+      (inout/forget-ns! 'inout.scratch)
+      (is (= [] (inout/check-ns 'inout.scratch)))
+      (finally (remove-ns 'inout.scratch)))))
+
+(defn- malli-symbols
+  "Symbols of form (at any depth) whose namespace is a malli one."
+  [form]
+  (filterv #(and (symbol? %) (some-> (namespace %) (str/starts-with? "malli")))
+           (tree-seq coll? seq form)))
+
+(deftest release-form
+  (testing "defn-typed expands to (def <name>-props …) + a plain clojure.core/defn whose :malli/schema is attr-map data: no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
+    (let [expansion (macroexpand-1 '(inout.core/defn-typed f {:a :int} -> :int a))]
+      (is (= ['do 'def 'clojure.core/defn] [(first expansion) (first (second expansion)) (first (nth expansion 2))]))
+      (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 2) 2))))
+      (is (= [] (malli-symbols expansion)))))
+  (testing "defmeta: in cljs every registration is under goog.DEBUG, so a release build (goog.DEBUG false) drops the cases, the :meta and #'f; in clj it registers at load"
+    (let [expand #(@#'inout/defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})
+          debug-gated? #(and (seq? %) (= 'clojure.core/when (first %)) (= 'goog.DEBUG (second %)))
+          cljs (expand {:ns {:name 'app.core}})
+          clj (expand nil)]
+      (swap! @#'inout/pending-meta dissoc 'app.core/g `g)
+      (is (= 2 (count (filter debug-gated? cljs))))
+      (is (= [] (filter debug-gated? clj)))
+      (is (= [] (malli-symbols cljs) (malli-symbols clj))))))

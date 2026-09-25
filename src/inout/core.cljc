@@ -1,4 +1,4 @@
-(ns bikes.auction.inout
+(ns inout.core
   "Input/output cases and field-table defaults for functions, written next to the function:
 
      (defmeta f
@@ -6,26 +6,26 @@
         :inout-tests [[{}     1]                      ; in/out cases: one [in expected] pair each,
                       [{:k 2} 2]]})                   ; in = f's one argument
 
-     (defnmalli f
+     (defn-typed f
        {:k [{:optional true :default 1} :int]} -> :any ; the input map's rows, defaults live here only
 
        ...k...)                                       ; every row key is a local of the same name
 
    `defmeta` (above f) expands to (declare f) + the registration of its cases and keys, and leaves
-   its map for the defnmalli below, which puts :doc and the other keys into f's attr-map.
-   `defnmalli` turns the input map into [:map …] and expands to (def f-props [:map …]) and
+   its map for the defn-typed below, which puts :doc and the other keys into f's attr-map.
+   `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]) and
    (defn f {:malli/schema [:=> [:cat f-props] :any]} [m] (let [{:keys [k]} (with-defaults f-props m)] ...)).
    A row with a default is `:optional`: instrumentation checks the call before the defaults are
-   filled. Callers require both unprefixed: (:require [bikes.auction.inout :refer [defnmalli defmeta]]).
-   A defmeta case passes iff (= expected (f in)). The older sources, `tests` and an attr-map
+   filled. Callers require both unprefixed: (:require [inout.core :refer [defn-typed defmeta]]).
+   A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map
    `{:inout-tests [[[args…] expected] …]}`, keep [[args…] expected] pairs, (= expected (apply f args));
-   registered cases win. Works in clj and cljs; needs no malli (schemas are checked by the
-   dev/test/REPL instrumentation, see backend/REPL.md).
+   registered cases win. Works in clj and cljs; this namespace never loads malli: `:malli/schema`
+   is plain var metadata until a dev/test/REPL loader runs malli.instrument collect! + instrument!.
    - `check-var` / `check-ns` return data (any REPL, including the browser runtime);
    - `deftests!` (clj) defines one clojure.test test per such var so run-tests and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
   #?(:clj (:require [clojure.test :as test])
-     :cljs (:require-macros [bikes.auction.inout])))
+     :cljs (:require-macros [inout.core])))
 
 (defn var-name [v] (symbol v))
 
@@ -78,7 +78,7 @@
 
 (defn undefined-metas
   "Names of ns-sym's vars that a `defmeta` declared and registered but nothing defined: a defmeta
-   whose defnmalli/defn is missing from the file (or misspelt)."
+   whose defn-typed/defn is missing from the file (or misspelt)."
   [ns-sym]
   (sort (for [[sym {:keys [var]}] @registry
               :when (and var (= (namespace sym) (name ns-sym))
@@ -100,7 +100,9 @@
 
 #?(:clj
    (defmacro tests
-     "Registers v's cases, a vector of pairs: (tests #'ns/f [[[args…] expected] …]). Replaces
+     "Legacy: registers v's cases, a vector of [[args…] expected] pairs, for a function of several
+      positional args (defmeta's `:inout-tests` is the form for a function of one argument):
+      (tests #'ns/f [[[args…] expected] …]). Replaces
       earlier ones. In cljs the registration, and with it the var #'f and its metadata, exists
       only under goog.DEBUG: a release build drops all of it."
      [v pairs]
@@ -143,7 +145,7 @@
 
 #?(:clj
    (defn- table-rows
-     "The input of a defnmalli (the one form between the name and `->`) as the `[:map …]` it
+     "The input of a defn-typed (the one form between the name and `->`) as the `[:map …]` it
       stands for: a map literal `{key schema …}` with keyword keys, where a row that carries props
       is `key [props schema]` (a value vector led by a map); the map's reader metadata holds the
       table's own props (`^{:closed true} {…}`); its `:as` is a binding (whole-map-local), not a
@@ -188,8 +190,8 @@
      (symbol (str (if (:ns env) (-> env :ns :name) (ns-name *ns*))) (name sym))))
 
 #?(:clj
-   (defmacro defnmalli
-     "(defnmalli name ^{table-props}? {key schema …} -> <out-schema> body…): a one-arity function of one map.
+   (defmacro defn-typed
+     "(defn-typed name ^{table-props}? {key schema …} -> <out-schema> body…): a one-arity function of one map.
       The input = the map literal of its rows, one entry per line: `key schema`, or `key [props schema]`
       for a row with props; the table's own props (`{:closed true}`) are the map's reader metadata.
       Wrapped into `[:map …]` and def'd as `<name>-props`.
@@ -201,7 +203,7 @@
       plain defn. Its docstring and cases go into `defmeta` under it. Instrumentation checks the call
       before the defaults are filled, so a row carrying `:default` is also `:optional true`."
      [fn-name & more]
-     (let [fail! #(throw (ex-info (str "defnmalli " fn-name ": " %) {:fn fn-name}))
+     (let [fail! #(throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name}))
            _ (when-not (symbol? fn-name)
                (fail! "the first argument must be the function's name"))
            _ (when (string? (first more))
@@ -240,9 +242,9 @@
 #?(:clj
    (defmacro defmeta
      "(defmeta name {…}): everything about the function `name` other than its signature, written
-      right ABOVE its defnmalli/defn, one empty line apart. `:inout-tests` = [in expected] pairs, in
+      right ABOVE its defn-typed/defn, one empty line apart. `:inout-tests` = [in expected] pairs, in
       = the function's one argument (single-arg-pairs), registered at load as `tests` does; every
-      other key (`:doc` …) goes into the attr-map of the defnmalli below (pending-meta), so it is
+      other key (`:doc` …) goes into the attr-map of the defn-typed below (pending-meta), so it is
       var metadata in clj and cljs. Expands to (declare name) + the registration, so it runs before
       the var is defined; the keys other than the cases are also recorded in `registry` as the var's
       `:meta` (register-meta!), which is where a plain defn below keeps them. In cljs all of it is
@@ -284,14 +286,14 @@
           (filter vector? (rest schema))))
 
 ;; qualified: cljs resolves a macro of the ns being compiled only through its ns name
-(bikes.auction.inout/tests #'with-defaults
+(inout.core/tests #'with-defaults
   [[[[:map [:a {:default 1} :int]] {}]                                  {:a 1}]
    [[[:map [:a {:default 1} :int]] {:a 2}]                              {:a 2}]
    [[[:map [:a {:default 1} [:maybe :int]]] {:a nil}]                   {:a nil}]
    [[[:map [:n [:map [:b {:default "x"} :string]]]] {:n {}}]            {:n {:b "x"}}]
    [[[:map {:closed true} [:a :int] [:b {:optional true} :int]] nil]    {}]])
 
-(bikes.auction.inout/tests #'defaulted-required-keys
+(inout.core/tests #'defaulted-required-keys
   [[[[:map [:a {:default 1} :int] [:b {:optional true :default 2} :int]]]  [[:a]]]
    [[[:map [:n [:map [:c {:default "x"} :string]]]]]                      [[:n :c]]]
    [[:int]                                                                []]])
@@ -340,8 +342,8 @@
 
 (def ^:dynamic *trace-cases*
   "When true, check-var prints `inout-case <ns/fn> <i> <args>` (and flushes) before each case,
-   so a caller that gives up on a blocked eval can name the case it blocked in
-   (backend/bin/after-edit.sh)."
+   so a caller that gives up on a blocked eval (an editor's after-edit hook) can name the case it
+   blocked in."
   false)
 
 (defn check-var

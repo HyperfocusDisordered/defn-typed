@@ -1,6 +1,6 @@
 (ns hooks.inout
-  "clj-kondo hooks for bikes.auction.inout. defnmalli: rewrites
-   (defnmalli name ^{table-props}? {key schema …} -> <out-schema> body…) into the def + defn it expands to,
+  "clj-kondo hooks for inout.core. defn-typed: rewrites
+   (defn-typed name ^{table-props}? {key schema …} -> <out-schema> body…) into the def + defn it expands to,
    the row keys bound as locals (and `^{:as sym}` on the map as the whole map), so the name, the
    schemas and the body lint like any defn. defmeta
    (written above the function): rewrites (defmeta name {…}) into (do (declare name) {…}), as the
@@ -9,7 +9,7 @@
   (:require [clj-kondo.hooks-api :as api]))
 
 (defn- arg-vector?
-  "Mirrors bikes.auction.inout/arg-vector?: a vector of binding forms (symbols, destructuring maps)
+  "Mirrors inout.core/arg-vector?: a vector of binding forms (symbols, destructuring maps)
    that holds a destructuring map or is followed by more body."
   [body]
   (let [form (first body)
@@ -30,14 +30,14 @@
     [(map #(if (api/map-node? %) (api/map-node (mapcat identity (remove as? (pairs %)))) %) meta-nodes)
      (some #(when (api/map-node? %) (second (first (filter as? (pairs %))))) meta-nodes)]))
 
-(defn defnmalli [{:keys [node]}]
+(defn defn-typed [{:keys [node]}]
   (let [[fn-name & more] (rest (:children node))
         [doc more] (if (api/string-node? (first more)) [(first more) (rest more)] [nil more])
         arrow? #(and (api/token-node? %) (= '-> (api/sexpr %)))
         [input [arrow out-schema & body]] (split-with (complement arrow?) more)
         table (first input)
         table? (and table (not (next input)) (api/map-node? table))
-        finding! #(api/reg-finding! (assoc (meta %1) :message (str "defnmalli: " %2) :type :syntax))
+        finding! #(api/reg-finding! (assoc (meta %1) :message (str "defn-typed: " %2) :type :syntax))
         ;; {key schema …} → the [key props? schema] rows the macro builds; `key [props schema]` = a row with props
         rows (when table?
                (for [[k v] (partition 2 (:children table))]
@@ -55,7 +55,7 @@
                             (mapcat #(when (api/vector-node? %) (:children %)) input)))
         [table-meta whole] (when table? (split-as (:meta table)))
         props (api/token-node (symbol (str (api/sexpr fn-name) "-props")))
-        m (api/token-node 'm__defnmalli)
+        m (api/token-node 'm__defn-typed)
         ;; the row keys as locals, also bound once to `_` so a row the body does not read reports
         ;; nothing (the macro binds every row, whether the body reads it or not)
         locals (keep #(let [k (first (:children %))]
