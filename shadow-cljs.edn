@@ -2,4 +2,9 @@
  :builds {:test {:target :node-test
                  :output-to "out/node-tests.js"
                  :ns-regexp "-test$"
-                 :autorun true}}}
+                 :autorun true}
+          ;; defn-typed.inline-test as a release (:advanced) build: the call sites compile to the
+          ;; positional call; clojure -M:cljs release inline && node out/inline-tests.js
+          :inline {:target :node-test
+                   :output-to "out/inline-tests.js"
+                   :ns-regexp "inline-test$"}}}

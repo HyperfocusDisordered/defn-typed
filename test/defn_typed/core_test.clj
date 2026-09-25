@@ -160,10 +160,11 @@
            (tree-seq coll? seq form)))
 
 (deftest release-form
-  (testing "defn-typed expands to (def <name>-props …) + a plain clojure.core/defn whose :malli/schema is attr-map data: no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
+  (testing "defn-typed expands to (def <name>-props …) + the positional defn holding the body + a plain clojure.core/defn whose :malli/schema is attr-map data: no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int} -> :int a))]
-      (is (= ['do 'def 'clojure.core/defn] [(first expansion) (first (second expansion)) (first (nth expansion 2))]))
-      (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 2) 2))))
+      (is (= ['do 'def 'clojure.core/defn 'clojure.core/defn] (cons (first expansion) (map first (rest expansion)))))
+      (is (= '(clojure.core/defn f--positional {:no-doc true} [a] a) (nth expansion 2)))
+      (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 3) 2))))
       (is (= [] (malli-symbols expansion)))))
   (testing "defmeta: in cljs every registration is under goog.DEBUG, so a release build (goog.DEBUG false) drops the cases, the :meta and #'f; in clj it registers at load"
     (let [expand #(@#'defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})

@@ -211,20 +211,173 @@
      (symbol (str (if (:ns env) (-> env :ns :name) (ns-name *ns*))) (name sym))))
 
 #?(:clj
+   (defn- constant-form?
+     "Whether form is data that evaluates to itself: no symbol, no call, at any depth."
+     [form]
+     (not-any? #(or (symbol? %) (seq? %)) (tree-seq coll? seq form))))
+
+#?(:clj
+   (defn- default-slot?
+     "Whether a row type form may carry `:default` in its own props: a props map holding it, or a
+      symbol or call in the props slot (its value shows only when evaluated)."
+     [type]
+     (let [slot (when (vector? type) (second type))]
+       (or (and (map? slot) (contains? slot :default)) (symbol? slot) (seq? slot)))))
+
+#?(:clj
+   (defn- runtime-type?
+     "Whether with-defaults can do more to a present value of this row type than the source shows:
+      a type that is not a keyword or a vector led by a keyword (a symbol, a call), or a `[:map …]`
+      whose rows, at any depth, may carry defaults."
+     [type]
+     (cond
+       (keyword? type) false
+       (vector? type) (or (not (keyword? (first type)))
+                          (and (= :map (first type))
+                               (some (fn [row] (let [[_ _ t] (row-parts row)] (or (default-slot? t) (runtime-type? t))))
+                                     (filter vector? (rest type)))))
+       :else true)))
+
+#?(:clj
+   (defn- default-form
+     "The form an absent key of a row takes, evaluated where the call is: the `:default` as written
+      when it is data, else a read of the evaluated `props` row at index (a symbol or a call there
+      evaluates once, at the def); nil for a row without a default slot."
+     [{:keys [type props index]}]
+     (let [slot (when (vector? type) (second type))]
+       (when (default-slot? type)
+         (if (and (map? slot) (constant-form? (:default slot)))
+           (:default slot)
+           `(:default (schema-props (peek (nth ~props ~index)))))))))
+
+#?(:clj
+   (defn- inline-on?
+     "The zero-cost switch: clj — JVM system property `defn-typed.inline=true`; cljs — the
+      compiler's `:optimizations` is `:advanced` (a release build)."
+     [cljs?]
+     (if cljs?
+       (= :advanced (some-> (resolve 'cljs.env/*compiler*) deref deref :options :optimizations))
+       (= "true" (System/getProperty "defn-typed.inline")))))
+
+#?(:clj
+   (defn- malli-check-fns
+     "{:validate :explain :humanize} of malli for the literal value check, or nil: loaded for cljs
+      (the compiler's JVM) and with the switch off (dev); with it on (a clj release) only when
+      something already loaded malli, so a release server never loads it for this check."
+     [cljs? inline?]
+     (when (or cljs? (not inline?) (find-ns 'malli.core))
+       (try {:validate (requiring-resolve 'malli.core/validate)
+             :explain (requiring-resolve 'malli.core/explain)
+             :humanize (requiring-resolve 'malli.error/humanize)}
+            (catch Exception _ nil)))))
+
+#?(:clj
+   (defn- literal-mismatches
+     "Why a map-literal argument does not fit the rows, one text per finding: an unknown key, a
+      missing required key, a constant value (data, see constant-form?) its row schema rejects
+      (with malli's humanized reason). A row whose schema cannot be evaluated here (clj: the
+      evaluated props; cljs: the source form when it is data) skips the value check."
+     [{:keys [rows]} arg schema-of malli]
+     (let [row-of (into {} (map (juxt :key identity)) rows)]
+       (concat
+        (for [k (keys arg) :when (not (contains? row-of k))]
+          (str (pr-str k) " — unknown key"))
+        (for [{:keys [key required]} rows :when (and required (not (contains? arg key)))]
+          (str (pr-str key) " — missing required key"))
+        (when malli
+          (for [[k v] arg
+                :let [row (row-of k)]
+                :when (and row (constant-form? v))
+                :let [reason (try (let [schema (schema-of row)]
+                                    (when (and (some? schema) (not ((:validate malli) schema v)))
+                                      (let [h ((:humanize malli) ((:explain malli) schema v))]
+                                        (if (and (sequential? h) (every? string? h))
+                                          (apply str (interpose ", " h))
+                                          (pr-str h)))))
+                                  (catch Exception _ nil))]
+                :when reason]
+            (str (pr-str k) " " (pr-str v) " — " reason)))))))
+
+#?(:clj
+   (defn- literal-call
+     "`(let [g v …] (positional …))` for a map-literal argument whose keys are all rows and that
+      holds every required row: the values bound in the literal's own order (the order the map
+      call would evaluate them in), an absent row given its default form (nil when optional)."
+     [{:keys [positional rows]} arg]
+     (let [locals (into {} (map (fn [k] [k (gensym (str (name k) "__"))])) (keys arg))]
+       `(let [~@(mapcat (fn [[k v]] [(locals k) v]) arg)]
+          (~positional ~@(map #(get locals (:key %) (:absent %)) rows))))))
+
+#?(:clj
+   (defn expand-call
+     "A call site of a defn-typed function, as its call-site expander (clj `:inline`, cljs a macro
+      of the same name) compiles it: a map-literal argument is checked (literal-mismatches) and a
+      mismatch prints one `WARNING defn-typed <file>:<line>: (f …) <findings>` to stderr; with the
+      switch on (inline-on?) a literal that fits becomes the positional call; everything else =
+      `fallback`, the normal call of the var. Never throws."
+     [{:keys [spec arg fallback cljs? file line]}]
+     (try
+       (if-not (map? arg)
+         fallback
+         (let [inline? (inline-on? cljs?)
+               schema-of (if cljs?
+                           #(when (constant-form? (:type %)) (:type %))
+                           (let [props (some-> (find-var (:props spec)) deref)]
+                             #(when props (peek (nth props (:index %))))))
+               mismatches (seq (literal-mismatches spec arg schema-of (malli-check-fns cljs? inline?)))]
+           (when mismatches
+             (binding [*out* *err*]
+               (println (str "WARNING defn-typed " file ":" line ": (" (name (:name spec)) " …) "
+                             (apply str (interpose "; " mismatches))))))
+           (if (and inline? (not mismatches) (:positional spec))
+             (literal-call spec arg)
+             fallback)))
+       (catch Exception _ fallback))))
+
+#?(:clj
+   (defn- install-cljs-expander!
+     "Makes `name` a macro for the cljs analyzer, beside the fn of that name: interned in the clj
+      namespace of the same name (where the analyzer looks up `alias/name` and `ns/name`) and
+      recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns). Value
+      position keeps resolving the fn. A clj var of that name that is not such an expander (a
+      .cljc loaded on the JVM) stays untouched: that fn then has no expander."
+     [env fn-name spec]
+     (let [ns-sym (-> env :ns :name)
+           macro-ns (create-ns ns-sym)
+           existing (.findInternedVar ^clojure.lang.Namespace macro-ns fn-name)]
+       (when (or (nil? existing) (::expander (meta existing)))
+         (let [cljs-file (resolve 'cljs.analyzer/*cljs-file*)
+               v (intern macro-ns (with-meta fn-name {::expander true})
+                         (fn [form env & args]
+                           (if (= 1 (count args))
+                             (expand-call {:spec spec :arg (first args) :fallback form :cljs? true
+                                           :file (some-> cljs-file deref)
+                                           :line (or (:line (meta form)) (:line env))})
+                             form)))]
+           (.setMacro ^clojure.lang.Var v)
+           (swap! @(resolve 'cljs.env/*compiler*)
+                  assoc-in [:cljs.analyzer/namespaces ns-sym :use-macros fn-name] ns-sym))))))
+
+#?(:clj
    (defmacro defn-typed
      "(defn-typed name ^{table-props}? {key schema …} -> <out-schema> body…): a one-arity function of one map.
       The input = the map literal of its rows, one entry per line: `key schema`, or `key [props schema]`
       for a row with props; the table's own props (`{:closed true}`) are the map's reader metadata.
       Wrapped into `[:map …]` and def'd as `<name>-props`.
-      The body sees every row key as a local of the same name (`:line-h` → `line-h`), bound after
-      `with-defaults` filled the defaults; `^{:as row}` on the map also binds that whole filled map
-      (keys beyond the rows included, `[:map …]` is open) to `row`. Expands to `(def <name>-props [:map …])` and
-      `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>]} [m] (let [{:keys [k…]}
-      (with-defaults <name>-props m)] body…))`, so everything that reads defn and :malli/schema sees a
-      plain defn. Its docstring and cases go into `defmeta` under it. A default = `:default` in the
-      row type's own props (`:qty [:int {:default 1}]`); instrumentation checks the call before the
-      defaults are filled, so the macro marks such a row `{:optional true}` (defaults-optional).
-      `:default` in a row's entry props is a compile error."
+      The body sees every row key as a local of the same name (`:line-h` → `line-h`), defaults
+      filled; `^{:as row}` on the map also binds the whole map as with-defaults fills it (keys beyond
+      the rows included, `[:map …]` is open) to `row`. Expands to `(def <name>-props [:map …])`,
+      `(defn <name>--positional [k… row?] body…)` (the rows in entry order) and
+      `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>]} [m] (let [{:keys [k…] :or {k default}} m]
+      (<name>--positional k…)))`, so everything that reads defn and :malli/schema sees a plain defn.
+      A default = `:default` in the row type's own props (`:qty [:int {:default 1}]`), read at
+      compile time; a row whose defaults only the evaluated schema shows (runtime-type?) is bound
+      through row-value, and `^{:as row}` through with-defaults. Instrumentation checks the call
+      before the defaults are filled, so the macro marks a defaulted row `{:optional true}`
+      (defaults-optional). Every call site goes through expand-call (clj `:inline`, cljs a macro of
+      the same name): a map literal is checked at compile time, and with the switch on (inline-on?)
+      a fitting literal compiles to the positional call. Its docstring and cases go into `defmeta`
+      above it. `:default` in a row's entry props is a compile error."
      [fn-name & more]
      (let [fail! #(throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name}))
            _ (when-not (symbol? fn-name)
@@ -245,26 +398,69 @@
              _ (when-let [paths (seq (entry-default-paths table))]
                  (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))
              in-schema (defaults-optional table)
-             row-keys (map first (filter vector? (rest in-schema)))
              ;; ^{:as sym} on the input map = Clojure's own :as: sym = the whole defaults-filled map
              whole (:as (meta (first input)))
              _ (when-not (or (nil? whole) (simple-symbol? whole))
                  (fail! (str "^{:as sym} takes a plain symbol, got " (pr-str whole))))
              props (symbol (str fn-name "-props"))
+             positional (symbol (str fn-name "--positional"))
+             cljs? (boolean (:ns &env))
+             q (qualified &env fn-name)
+             q-props (qualified &env props)
+             offset (if (map? (second in-schema)) 2 1)
+             rows (vec (map-indexed
+                        (fn [i row]
+                          (let [[k row-props type] (row-parts row)
+                                plan {:key k :local (symbol (name k)) :binding (symbol (namespace k) (name k))
+                                      :type type :props q-props :index (+ offset i)}]
+                            (cond-> (assoc plan :runtime (runtime-type? type))
+                              (default-slot? type) (assoc :absent (default-form plan))
+                              (and (not (default-slot? type)) (:optional row-props)) (assoc :absent nil)
+                              (not (or (default-slot? type) (:optional row-props))) (assoc :required true))))
+                        (filter vector? (rest in-schema))))
+             locals (cond-> (mapv :local rows) whole (conj whole))
+             ;; clojure fns take at most 20 positional params: a larger table keeps its body in name
+             positional? (<= (count locals) 20)
              m (gensym "m")
+             bindings (if whole
+                        [{:keys (mapv :binding rows) :as whole} `(with-defaults ~props ~m)]
+                        (into [(let [static (remove :runtime rows)
+                                     ;; an optional row without a default reads nil either way
+                                     defaults (into {} (keep #(when (some? (:absent %)) [(:local %) (:absent %)]))
+                                                    static)]
+                                 (cond-> {:keys (mapv :binding static)} (seq defaults) (assoc :or defaults)))
+                               m]
+                              (mapcat #(vector (:local %) `(row-value (nth ~props ~(:index %)) ~m))
+                                      (filter :runtime rows))))
+             spec (cond-> {:name q :props q-props
+                           :rows (mapv #(select-keys % [:key :index :type :absent :required]) rows)}
+                    (and positional? (not whole) (not-any? :runtime rows))
+                    (assoc :positional (qualified &env positional)))
              ;; the defmeta written above: its keys other than the cases go into the defn's attr-map,
              ;; so :doc is the var's docstring in clj and cljs alike
-             q (qualified &env fn-name)
-             meta-keys (dissoc (get @pending-meta q) :inout-tests)]
+             meta-keys (dissoc (get @pending-meta q) :inout-tests)
+             attrs (cond-> (merge meta-keys {:malli/schema [:=> [:cat props] out-schema]})
+                     (not cljs?) (assoc :inline-arities #{1}
+                                        ;; the fallback is a host call on the var's value: no op
+                                        ;; position, so it is never expanded again
+                                        :inline `(fn [arg#]
+                                                   (expand-call {:spec '~spec :arg arg# :cljs? false
+                                                                 :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
+                                                                 :file *file* :line (deref clojure.lang.Compiler/LINE)}))))]
          (swap! pending-meta dissoc q)
-         `(do
-            (def ~props ~in-schema)
-            (defn ~fn-name
-              ~(merge meta-keys {:malli/schema [:=> [:cat props] out-schema]})
-              [~m]
-              (let [~(cond-> {:keys (mapv #(symbol (namespace %) (name %)) row-keys)} whole (assoc :as whole))
-                    (with-defaults ~props ~m)]
-                ~@body)))))))
+         (when cljs? (install-cljs-expander! &env fn-name spec))
+         (if positional?
+           `(do
+              (def ~props ~in-schema)
+              (defn ~positional {:no-doc true} ~locals ~@body)
+              (defn ~fn-name ~attrs [~m]
+                (let ~bindings
+                  (~positional ~@locals))))
+           `(do
+              (def ~props ~in-schema)
+              (defn ~fn-name ~attrs [~m]
+                (let ~bindings
+                  ~@body))))))))
 
 #?(:clj
    (defmacro defmeta
@@ -294,25 +490,36 @@
             ~@(when (contains? m :inout-tests)
                 [(dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m))))]))))))
 
+(declare with-defaults)
+
+(defn- fill-row
+  "m with row's key filled as with-defaults fills it: absent → the `:default` of the row type's own
+   props (when it has one), a map value of a `[:map …]` row → filled the same way, else unchanged."
+  [m row]
+  (let [[k _ type] (row-parts row)
+        type-props (schema-props type)]
+    (cond
+      (not (contains? m k))
+      (cond-> m (contains? type-props :default) (assoc k (:default type-props)))
+
+      (and (vector? type) (= :map (first type)) (map? (get m k)))
+      (update m k #(with-defaults type %))
+
+      :else m)))
+
 (defn with-defaults
   "props with the default of every `[:map …]` row whose key props lacks, the `:default` of the
    row type's own props (`[:a [:int {:default 1}]]`); a present key, explicit nil included, is
    kept. Row = [k type] or [k row-props type]; a row whose type is a `[:map …]` vector and whose
    value in props is a map is filled the same way. nil props = {}."
   [schema props]
-  (reduce (fn [m row]
-            (let [[k _ type] (row-parts row)
-                  type-props (schema-props type)]
-              (cond
-                (not (contains? m k))
-                (cond-> m (contains? type-props :default) (assoc k (:default type-props)))
+  (reduce fill-row (or props {}) (filter vector? (rest schema))))
 
-                (and (vector? type) (= :map (first type)) (map? (get m k)))
-                (update m k #(with-defaults type %))
-
-                :else m)))
-          (or props {})
-          (filter vector? (rest schema))))
+(defn row-value
+  "The value with-defaults gives row's key of m: what a defn-typed binds for a row whose defaults
+   only the evaluated schema shows (a symbol or a call as its type, nested defaults)."
+  [row m]
+  (get (fill-row m row) (first row)))
 
 ;; qualified: cljs resolves a macro of the ns being compiled only through its ns name
 (defn-typed.core/tests #'with-defaults
