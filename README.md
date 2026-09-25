@@ -88,13 +88,13 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
 ```clojure
 ;; deps.edn, from Clojars
-{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.2.1"}}}
+{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.3.0"}}}
 
 ;; deps.edn, from git
 {:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.2.1" :git/sha "143bc99"}}}
 
 ;; shadow-cljs.edn
-{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.2.1"]]}
+{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.3.0"]]}
 ```
 
 `metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 (2026-09-25)
+
+- malli in production: `:malli-in-prod true` (or `{:sample 0.01 :redact #{:phone}}`) in a
+  function's `defmeta` makes malli check that function's input map and result at run time in
+  every build, once the app requires `defn-typed.malli-in-prod` (new namespace). Without that
+  require, the function runs unchecked and prints one line. The check never changes the result
+  and never throws into the caller; validators are compiled once per function, and a successful
+  check allocates nothing. Violations reach `defn-typed.malli-in-prod/on-malli-violation!` off the
+  call path (clj: one background thread, cljs: a 0 ms timeout) as
+  `{:fn :direction :value :errors :schema :stack :at :repeats}`: `:redact` keys are removed at any
+  depth, there is one event per function and failing paths per 60 s (the rest counted in
+  `:repeats`), and a throwing handler is caught. `defn-typed.core` still never loads malli: a cljs
+  release without the require has no malli code. The switch never rewrites an opted-in call to the
+  positional call.
+- README: "Validating data with the same schema" — `<name>-props` as a plain malli schema for
+  forms and API input (clj and cljs `:advanced`).
+- cljs: the call-site expander decides per compile. A shadow-cljs JVM that ran a release no longer
+  runs stale literal checks in its later dev compiles (rv3 N1).
+- A `recur` written by a macro in the body is found (the body is macroexpanded first), so it keeps
+  the map path instead of throwing ClassCastException (rv3 N2).
+- clj-kondo hook: `^{:as a}` with a row `:a` is the finding `:a and ^{:as a} both bind a`, the same
+  as the macro (rv3 N3).
+- cljs literal checks judge numbers as JS numbers at any depth: `1.0` fits `:int`, `[1 2]` fits
+  `[:vector :double]`, and a double schema's props still apply (rv3 M2 class).
+
 ## 0.2.1 (2026-09-25)
 
 - A body may call its own function by name (a recursive call, or the name passed as a value): clj
