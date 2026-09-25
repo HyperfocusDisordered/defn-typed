@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4 (2026-09-25)
+
+- `(defn-typed f {…} ->)` with nothing after `->` is a compile error naming the function ("no output
+  schema after ->"); the clj-kondo hook reports it too (before, the macro compiled it with a `nil`
+  output schema and the hook stayed silent).
+- README: "Static checking" — copying the hooks, emitting malli's clj-kondo types (clj/cljc via
+  `malli.clj-kondo/emit!`, cljs via `malli.clj-kondo/print-cljs!`), and what is checked statically,
+  at runtime and in a release.
+
 ## 0.1.3 (2026-09-25)
 
 - clj-kondo hook: a `defn-typed` without `->` reports "expected ->" and the rest of the file still lints
