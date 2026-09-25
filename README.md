@@ -150,8 +150,8 @@ project:
 clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
 ```
 
-then add the copied dir to `.clj-kondo/config.edn` `:config-paths` (clj-kondo does this
-automatically for configs it copies into `.clj-kondo/`). The `defn-typed` hook lints the rows, the
+It copies them to `.clj-kondo/imports/io.github.denisovchar/inout/`, which clj-kondo loads with no
+further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
 arrow and the body as the `def` + `defn` above, with the row keys as locals, and reports the same
 shape errors as the macro; the `defmeta` hook lints the map as code.
 
