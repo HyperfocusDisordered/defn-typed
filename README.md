@@ -7,12 +7,29 @@ A function's input/output contract and its examples, written next to the functio
 Most languages give you one familiar shape for a typed function: name, inputs with their types,
 output type, body.
 
-```
+TypeScript
+
+```typescript
 function orderTotal({ price, qty = 1, discount = 0 }:
-  { price: number; qty?: number; discount?: number }): number        // TypeScript
-fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int     // Kotlin
-func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int  // Swift
-def order_total(price: int, qty: int = 1, discount: int = 0) -> int: # Python
+  { price: number; qty?: number; discount?: number }): number
+```
+
+Kotlin
+
+```kotlin
+fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int
+```
+
+Swift
+
+```swift
+func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int
+```
+
+Python
+
+```python
+def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 ```
 
 Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
