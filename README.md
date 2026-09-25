@@ -325,9 +325,11 @@ The switch:
   it). In the release JS such a call builds no map: `(c/order-total {:price p :qty 3})` came out
   as `quot(300 * p, 100)`.
 
-Off everywhere else: dev, REPL, tests. A rewritten call skips the var, so instrumentation would not
-see it and a redefinition in the REPL would not reach it; with the switch off every call goes
-through the var.
+The switch is for release builds only. A rewritten call skips `<name>`, so instrumentation does
+not see it. With the switch on, redefining a function in the REPL can leave stale call sites: a
+caller compiled earlier calls the new `<name>--positional` with the old row order (so does a
+caller compiled against an older version of the function). Keep it off in dev, REPL and tests,
+where every call goes through the var.
 
 A 3-row function with 2 defaults, `(total {:price p :qty 3})`, criterium `quick-bench` on JVM 21:
 positional `defn` 36 ns, switch off 51 ns, switch on 28 ns (0.1.4, which filled the defaults by
