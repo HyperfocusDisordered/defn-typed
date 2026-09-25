@@ -215,7 +215,9 @@
       (is (= [others [4 "defn-typed: the input map has a key without a schema: {key schema …}"]]
              (lint "(defn-typed f {:a :int :b} -> :any a)")))
       (is (= [others [4 "defn-typed: :x/b and :y/b both bind b"]]
-             (lint "(defn-typed f {:x/b :int :y/b :int} -> :any b)")))))
+             (lint "(defn-typed f {:x/b :int :y/b :int} -> :any b)")))
+      (is (= [others [4 "defn-typed: :a and ^{:as a} both bind a"]]
+             (lint "(defn-typed f ^{:as a} {:a :int} -> :any a)")))))
   (testing "the macro throws a compile error naming the same problem (an odd map literal is the reader's error)"
     (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
       (is (= "defmeta 5: the first argument must be the function's name" (error '(defn-typed.core/defmeta 5 {:doc "x"}))))
