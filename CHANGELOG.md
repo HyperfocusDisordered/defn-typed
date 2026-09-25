@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 (2026-09-25)
+
+- A default = `:default` in the row type's own props, type first: `:qty [:int {:min 1 :default 1}]`
+  (malli's schema default). `defn-typed` marks such a row `{:optional true}` itself
+  (`defaults-optional`, nested maps included); `with-defaults` reads the type's props.
+- `:default` in a row's entry props (`key [{:default v} schema]`) = compile error and clj-kondo
+  error naming the fix; entry props stay for `{:optional true}` without a default.
+- Removed: `defaulted-required-keys`, `defaulted-key-rule` and `malli-reasons`' defaulted-key line;
+  `malli-fns` no longer returns `:form`. Added: `schema-props`, `entry-default-paths`,
+  `entry-default-rule`, `defaults-optional`.
+
 ## 0.1.0 (2026-09-25)
 
 - `defn-typed` + `defmeta`, extracted from a production Clojure/ClojureScript app.
