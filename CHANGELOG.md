@@ -2,8 +2,7 @@
 
 ## 0.1.0 (2026-09-25)
 
-- `defn-typed` + `defmeta`, extracted from the bikes-auction app (`bikes.auction.inout`, where the
-  macro was named `defnmalli`); behaviour unchanged.
+- `defn-typed` + `defmeta`, extracted from a production Clojure/ClojureScript app.
 - Check API: `check-var`, `check-vars`, `check-ns`, `case-vars`, `registered-vars`,
   `undefined-metas`, `forget-ns!`, `deftests!`, `test-ns!`, `test-var!`, `malli-reasons`,
   `malli-fns`, `*trace-cases*`, `with-defaults`; legacy `tests`.
