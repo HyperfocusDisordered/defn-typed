@@ -285,15 +285,17 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 (do (def name-props [:map [key schema] …])   ; a defaulted row: [key {:optional true} schema]
     (declare name)                            ; the body may call name
     (defn name--positional [key …] body…)
-    (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc … :inline …}
+    (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc … :inline …
+                :arglists '([{:keys [key …]}])}
       [m]
       (let [{:keys [key …] :or {key default …}} m]
         (name--positional key …))))
 ```
 
-so clj-kondo (with the exported hooks), malli's `collect!`/`instrument!`, `:arglists` and any
-tool that reads a `defn` see a `defn`. The defaults are the `:or` of the destructuring, taken from
-the rows when the macro expands. With `^{:as row}` the map goes through
+so clj-kondo (with the exported hooks), malli's `collect!`/`instrument!` and any tool that reads
+a `defn` see a `defn`. `:arglists` lists the rows (`^{:as row}` adds `:as row`), so `(doc name)`
+and editor hovers show the inputs: `([{:keys [price qty discount]}])`. The defaults are the `:or`
+of the destructuring, taken from the rows when the macro expands. With `^{:as row}` the map goes through
 `defn-typed.core/with-defaults` (the whole filled map is bound); a row whose defaults only the
 evaluated schema shows (a symbol as its type, `:frame frame`, or a `[:map …]` row with defaults
 inside) is read at call time. `<name>-props` keeps entry order up to 8 rows (a larger map literal
