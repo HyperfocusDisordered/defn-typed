@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0 (2026-09-25)
+
+- Defaults cost nothing at call time: they are the `:or` of the function's destructuring, taken
+  from the rows when the macro expands. `with-defaults` still runs for `^{:as row}` functions,
+  and `row-value` (new) for a row whose defaults only the evaluated schema shows (a symbol as its
+  type, a `[:map …]` row with defaults inside). Results are unchanged: an explicit nil stays nil,
+  a default written as a call is evaluated once, at the def.
+- The body lives in `<name>--positional` (the rows as parameters, entry order); `<name>` destructures
+  and calls it.
+- Zero-cost calls: with the switch on (clj: JVM property `defn-typed.inline=true` at compile time;
+  cljs: `:optimizations :advanced`), a call whose argument is a map literal of known keys holding
+  every required row compiles to the positional call, values evaluated in the literal's order.
+  clj covers every direct call (`:inline`); cljs covers calls through an alias, a qualified name or
+  inside the defining namespace (a macro of the same name), not a `:refer`red call from another
+  namespace.
+- Compile-time literal checks, switch on or off: an unknown key, a missing required key, or a data
+  value its row schema rejects prints `WARNING defn-typed <file>:<line>: (f …) <findings>` to
+  stderr and the call compiles to the map call.
+- New public fns: `expand-call` (the call-site expander), `row-value`.
+
 ## 0.1.4 (2026-09-25)
 
 - `(defn-typed f {…} ->)` with nothing after `->` is a compile error naming the function ("no output
