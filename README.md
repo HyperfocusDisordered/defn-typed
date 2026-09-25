@@ -7,8 +7,11 @@ A function's input/output contract and its examples, written next to the functio
 Most languages give you one familiar shape for a typed function: name, inputs with their types,
 output type, body.
 
-```typescript
-function fizzbuzz({ n }: { n: number }): string { … }
+```
+function fizzbuzz(n: number): string      // TypeScript
+fun fizzbuzz(n: Int): String              // Kotlin
+func fizzbuzz(n: Int) -> String           // Swift
+def fizzbuzz(n: int) -> str:              # Python
 ```
 
 Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
