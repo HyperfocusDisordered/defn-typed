@@ -1,67 +1,17 @@
-(ns karma.card.inout-test
-  "Runs the in/out cases written next to their functions. A namespace that gains cases is
-   listed here; each must report cases (a namespace with none would pass vacuously). Below them:
-   the pair format and what `defnmalli` and `defmeta` expand to, in cljs."
+(ns inout.core-test
+  "Runs the in/out cases written next to inout.core's own functions. Below them: the pair format
+   and what `defn-typed` and `defmeta` expand to, in cljs."
   (:require [cljs.test :refer [deftest is testing]]
-            [bikes.auction.inout :as inout :refer [defnmalli defmeta]]
-            [malli.instrument :as mi]
-            [karma.card.state]
-            [karma.card.api]
-            [karma.card.views.manager]
-            [karma.card.views.lot-detail]
-            [karma.card.views.listing]
-            [karma.card.views.xray]
-            [karma.card.views.chat-demo]))
+            [inout.core :as inout :refer [defn-typed defmeta]]
+            [malli.instrument :as mi]))
 
 (defn- summary [results]
   {:cases (reduce + 0 (map :cases results))
    :failures (vec (mapcat :failures results))})
 
-(deftest karma-card-state-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.state))]
-    (testing "karma.card.state"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
-(deftest karma-card-api-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.api))]
-    (testing "karma.card.api"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
-(deftest karma-card-views-manager-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.views.manager))]
-    (testing "karma.card.views.manager"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
-(deftest karma-card-views-listing-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.views.listing))]
-    (testing "karma.card.views.listing"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
-(deftest karma-card-views-lot-detail-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.views.lot-detail))]
-    (testing "karma.card.views.lot-detail"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
-(deftest karma-card-views-xray-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.views.xray))]
-    (testing "karma.card.views.xray"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
-(deftest karma-card-views-chat-demo-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'karma.card.views.chat-demo))]
-    (testing "karma.card.views.chat-demo"
-      (is (pos? cases))
-      (is (= [] failures)))))
-
 (deftest inout-cases
-  (let [{:keys [cases failures]} (summary (inout/check-ns 'bikes.auction.inout))]
-    (testing "bikes.auction.inout"
+  (let [{:keys [cases failures]} (summary (inout/check-ns 'inout.core))]
+    (testing "inout.core"
       (is (pos? cases))
       (is (= [] failures)))))
 
@@ -70,7 +20,7 @@
    :inout-tests [[{:a 1}      3]
                  [{:a 1 :b 5} 6]]})
 
-(defnmalli padded
+(defn-typed padded
   ^{:closed true}
   {:a :int
    :b [{:optional true :default 2} :int]} -> :int
@@ -98,7 +48,7 @@
       (is (re-find #"incremented" (str message)) (pr-str bad))))
   (swap! inout/registry dissoc `incremented))
 
-(deftest defnmalli-expansion
+(deftest defn-typed-expansion
   (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
     (is (= [:map {:closed true} [:a :int] [:b {:optional true :default 2} :int]] padded-props))
     ;; cljs var metadata keeps the source form; malli's collect! evaluates it (see below)
@@ -108,15 +58,15 @@
     (is (= 6 (padded {:a 1 :b 5})))))
 
 (deftest defmeta-expansion
-  (testing "defmeta above the defnmalli: :doc goes into the defn at compile time; the registry also keeps it beside the cases (where a plain defn below keeps it)"
+  (testing "defmeta above the defn-typed: :doc goes into the defn at compile time; the registry also keeps it beside the cases (where a plain defn below keeps it)"
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
     (is (= {:doc "a + b, b defaulting to 2."} (:meta (get @inout/registry `padded))))
     (is (= {:var `padded :cases 2 :failures []} (inout/check-var #'padded)))))
 
-(mi/collect! {:ns [karma.card.inout-test]})
+(mi/collect! {:ns [inout.core-test]})
 
-(deftest defnmalli-schema-is-instrumented
-  (mi/instrument! {:filters [(mi/-filter-ns 'karma.card.inout-test)]})
+(deftest defn-typed-schema-is-instrumented
+  (mi/instrument! {:filters [(mi/-filter-ns 'inout.core-test)]})
   (try
     (testing "a good call passes (a defaulted key may be absent: its row is :optional), an unknown key is rejected as :malli.core/invalid-input"
       (is (= 3 (padded {:a 1})))
@@ -125,4 +75,4 @@
         (is (= :malli.core/invalid-input (:type data)))
         (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))))
     (finally
-      (mi/unstrument! {:filters [(mi/-filter-ns 'karma.card.inout-test)]}))))
+      (mi/unstrument! {:filters [(mi/-filter-ns 'inout.core-test)]}))))
