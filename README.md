@@ -1,5 +1,9 @@
 # defn-typed
 
+[![test](https://github.com/HyperfocusDisordered/defn-typed/actions/workflows/test.yml/badge.svg)](https://github.com/HyperfocusDisordered/defn-typed/actions/workflows/test.yml)
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hyperfocusdisordered/defn-typed.svg)](https://clojars.org/io.github.hyperfocusdisordered/defn-typed)
+[![cljdoc badge](https://cljdoc.org/badge/io.github.hyperfocusdisordered/defn-typed)](https://cljdoc.org/d/io.github.hyperfocusdisordered/defn-typed)
+
 A function's input/output contract and its examples, written next to the function.
 
 ## Why
@@ -65,8 +69,14 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 ## Install
 
 ```clojure
-;; deps.edn
+;; deps.edn, from Clojars
+{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.1.1"}}}
+
+;; deps.edn, from git
 {:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.1.1" :git/sha "008ee7a"}}}
+
+;; shadow-cljs.edn
+{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.1.1"]]}
 ```
 
 `metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).
