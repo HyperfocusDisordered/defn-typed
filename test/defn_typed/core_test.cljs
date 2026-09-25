@@ -23,7 +23,7 @@
 (defn-typed padded
   ^{:closed true}
   {:a :int
-   :b [{:optional true :default 2} :int]} -> :int
+   :b [:int {:default 2}]} -> :int
 
   (+ a b))
 
@@ -50,10 +50,10 @@
 
 (deftest defn-typed-expansion
   (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
-    (is (= [:map {:closed true} [:a :int] [:b {:optional true :default 2} :int]] padded-props))
+    (is (= [:map {:closed true} [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
     ;; cljs var metadata keeps the source form; malli's collect! evaluates it (see below)
     (is (= '[:=> [:cat padded-props] :int] (:malli/schema (meta #'padded)))))
-  (testing "defaults come from the table"
+  (testing "defaults come from the row type's own props; the absent key is filled"
     (is (= 3 (padded {:a 1})))
     (is (= 6 (padded {:a 1 :b 5})))))
 
@@ -68,8 +68,9 @@
 (deftest defn-typed-schema-is-instrumented
   (mi/instrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]})
   (try
-    (testing "a good call passes (a defaulted key may be absent: its row is :optional), an unknown key is rejected as :malli.core/invalid-input"
+    (testing "a good call passes (a defaulted key may be absent: the macro made its row :optional), an unknown key is rejected as :malli.core/invalid-input"
       (is (= 3 (padded {:a 1})))
+      (is (= 6 (padded {:a 1 :b 5})))
       (let [data (try (padded {:a 1 :c 3}) nil
                       (catch :default e (ex-data e)))]
         (is (= :malli.core/invalid-input (:type data)))

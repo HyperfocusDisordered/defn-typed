@@ -41,11 +41,10 @@ order, nothing else.
 
 ```clojure
 (defn-typed order-total {
-  :price    pos-int?
-  :qty      [{:optional true :default 1} pos-int?]
-  :discount [{:optional true :default 0} [:int {:min 0 :max 100}]]
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
 } -> :int
-  …)
 ```
 
 Same shape, and the signature also says what none of the four can: `discount` is 0 to 100.
@@ -87,9 +86,9 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
                  [{:price 100 :qty 3 :discount 10}  270]]})
 
 (defn-typed order-total {
-  :price    pos-int?
-  :qty      [{:optional true :default 1} pos-int?]
-  :discount [{:optional true :default 0} [:int {:min 0 :max 100}]]
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
 } -> :int
 
   (quot (* price qty (- 100 discount)) 100))
@@ -160,9 +159,8 @@ Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verb
 - **Input** = one map literal, one row per line: `key schema`, or `key [props schema]` for a row
   with props (a value vector whose first element is a map). Keys are keywords; qualified keys bind
   by their name (`:x/b` → `b`).
-- **Defaults** live only in the row props, `{:optional true :default v}`. A defaulted row must be
-  `:optional` (instrumentation checks the call before the defaults are filled); a defaulted row
-  without it is a compile error.
+- **Defaults** = `:default` in the type's own props, `:qty [:int {:min 1 :default 1}]`; that row is optional by itself.
+- **Row props** `key [props schema]` = `{:optional true}` without a default; `:default` there is a compile error.
 - **Output** = any malli schema after `->`, on the line of the closing `}`.
 - **Body**: no argument vector — every row key is already a local.
 - **Table props** go on the map as reader metadata; `^{:as sym}` binds the whole defaults-filled
@@ -171,7 +169,7 @@ Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verb
   ```clojure
   (defn-typed with-total ^{:closed true :as row} {
     :price :int
-    :qty   [{:optional true :default 1} :int]
+    :qty   [:int {:default 1}]
   } -> [:map [:total :int]]
 
     (assoc row :total (* price qty)))
@@ -186,7 +184,7 @@ Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verb
 `defn-typed` expands to plain Clojure:
 
 ```clojure
-(do (def name-props [:map [key schema] …])
+(do (def name-props [:map [key schema] …])   ; a defaulted row: [key {:optional true} schema]
     (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc …}
       [m]
       (let [{:keys [key …]} (defn-typed.core/with-defaults name-props m)]
@@ -238,7 +236,7 @@ shape errors as the macro; the `defmeta` hook lints the map as code.
 | `(test-ns! 'ns)` / `(test-var! #'f)` (clj) | runs `clojure.test` tests + cases under one report, prints one summary line |
 | `(malli-reasons (malli-fns) ex-data)` | `<key path> · <message> · got <value>` lines for a `:malli.core/invalid-input`/`-output` ex-data |
 | `*trace-cases*` | when true, `check-var` prints `inout-case <ns/fn> <i> <args>` before each case |
-| `(with-defaults schema m)` | `m` with the row defaults filled (nested `[:map …]` rows too) |
+| `(with-defaults schema m)` | `m` with each absent row's `:default` (from the row type's props) filled, nested `[:map …]` rows too |
 | `(tests #'f [[[args…] out] …])` | legacy: registers positional-args cases; `defmeta` is the form for one-argument functions |
 
 ## After-edit hook
@@ -260,7 +258,7 @@ the case a blocked eval stopped in.
 
 ## malli versions
 
-The library code calls `malli.core/explain`, `malli.core/form` and `malli.error/error-message`
+The library code calls `malli.core/explain` and `malli.error/error-message`
 (resolved lazily by `malli-fns`), and relies on `:malli/schema` metadata being collected by
 `malli.instrument/collect!` (clj) and on the `:malli.core/invalid-input` /
 `:malli.core/invalid-output` / `:malli.core/missing-key` data. `deps.edn` declares **0.20.1**.

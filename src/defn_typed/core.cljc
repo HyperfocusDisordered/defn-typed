@@ -7,7 +7,7 @@
                       [{:k 2} 2]]})                   ; in = f's one argument
 
      (defn-typed f
-       {:k [{:optional true :default 1} :int]} -> :any ; the input map's rows, defaults live here only
+       {:k [:int {:default 1}]} -> :any               ; the input map's rows, a default in its type's props
 
        ...k...)                                       ; every row key is a local of the same name
 
@@ -15,8 +15,8 @@
    its map for the defn-typed below, which puts :doc and the other keys into f's attr-map.
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]) and
    (defn f {:malli/schema [:=> [:cat f-props] :any]} [m] (let [{:keys [k]} (with-defaults f-props m)] ...)).
-   A row with a default is `:optional`: instrumentation checks the call before the defaults are
-   filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
+   The macro marks a row with a default `:optional`: instrumentation checks the call before the
+   defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map
    `{:inout-tests [[[args…] expected] …]}`, keep [[args…] expected] pairs, (= expected (apply f args));
    registered cases win. Works in clj and cljs; this namespace never loads malli: `:malli/schema`
@@ -117,21 +117,42 @@
   [row]
   (if (map? (second row)) row [(first row) nil (second row)]))
 
-(defn defaulted-required-keys
-  "Key paths of the `[:map …]` rows of schema (nested maps included) that carry `:default` without
-   `:optional true`. Instrumentation checks a call before with-defaults fills the defaults, so a
-   call that leaves such a key out is rejected although the table gives it a value."
+(defn schema-props
+  "A schema's own props, the map right after its type (`[:int {:min 1 :default 1}]` → `{:min 1
+   :default 1}`); nil for a schema without them (`:int`, `[:maybe :int]`)."
+  [schema]
+  (let [props (when (vector? schema) (second schema))]
+    (when (map? props) props)))
+
+(defn entry-default-paths
+  "Key paths of the `[:map …]` rows of schema (nested maps included) that carry `:default` in their
+   entry props (`[k {:default v} type]`): a default lives only in the type's own props."
   [schema]
   (if (and (vector? schema) (= :map (first schema)))
     (vec (mapcat (fn [row]
                    (let [[k row-props type] (row-parts row)]
-                     (concat (when (and (contains? row-props :default) (not (:optional row-props)))
-                               [[k]])
-                             (map #(into [k] %) (defaulted-required-keys type)))))
+                     (concat (when (contains? row-props :default) [[k]])
+                             (map #(into [k] %) (entry-default-paths type)))))
                  (filter vector? (rest schema))))
     []))
 
-(def defaulted-key-rule "defaulted key must be {:optional true …}")
+(def entry-default-rule "put :default into the schema's props: [:int {:default v}]")
+
+(defn defaults-optional
+  "schema with every `[:map …]` row whose type carries `:default` in its own props marked
+   `{:optional true}` (nested maps included): instrumentation checks a call before with-defaults
+   fills the defaults, so a defaulted key may be absent."
+  [schema]
+  (if (and (vector? schema) (= :map (first schema)))
+    (into [:map]
+          (map #(if (vector? %)
+                  (let [[k row-props type] (row-parts %)
+                        row-props (cond-> row-props
+                                    (contains? (schema-props type) :default) (assoc :optional true))]
+                    (if row-props [k row-props (defaults-optional type)] [k (defaults-optional type)]))
+                  %))
+          (rest schema))
+    schema))
 
 (defn path-text
   "A key path as the loop prints it: `:a :b`; the empty path reads `(value)`."
@@ -200,8 +221,10 @@
       (keys beyond the rows included, `[:map …]` is open) to `row`. Expands to `(def <name>-props [:map …])` and
       `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>]} [m] (let [{:keys [k…]}
       (with-defaults <name>-props m)] body…))`, so everything that reads defn and :malli/schema sees a
-      plain defn. Its docstring and cases go into `defmeta` under it. Instrumentation checks the call
-      before the defaults are filled, so a row carrying `:default` is also `:optional true`."
+      plain defn. Its docstring and cases go into `defmeta` under it. A default = `:default` in the
+      row type's own props (`:qty [:int {:default 1}]`); instrumentation checks the call before the
+      defaults are filled, so the macro marks such a row `{:optional true}` (defaults-optional).
+      `:default` in a row's entry props is a compile error."
      [fn-name & more]
      (let [fail! #(throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name}))
            _ (when-not (symbol? fn-name)
@@ -215,7 +238,10 @@
          (fail! "no input rows between the name and ->"))
        (when (arg-vector? body)
          (fail! (str "args are bound from the rows: drop the argument vector " (pr-str (first body)))))
-       (let [in-schema (table-rows fail! input)
+       (let [table (table-rows fail! input)
+             _ (when-let [paths (seq (entry-default-paths table))]
+                 (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))
+             in-schema (defaults-optional table)
              row-keys (map first (filter vector? (rest in-schema)))
              ;; ^{:as sym} on the input map = Clojure's own :as: sym = the whole defaults-filled map
              whole (:as (meta (first input)))
@@ -228,8 +254,6 @@
              q (qualified &env fn-name)
              meta-keys (dissoc (get @pending-meta q) :inout-tests)]
          (swap! pending-meta dissoc q)
-         (when-let [paths (seq (defaulted-required-keys in-schema))]
-           (fail! (str (apply str (interpose ", " (map path-text paths))) " · " defaulted-key-rule)))
          `(do
             (def ~props ~in-schema)
             (defn ~fn-name
@@ -268,15 +292,17 @@
                 [(dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m))))]))))))
 
 (defn with-defaults
-  "props with the `{:default v}` of every `[:map …]` row whose key props lacks (a present key,
-   explicit nil included, is kept). Row = [k type] or [k row-props type]; a row whose type is a
-   `[:map …]` vector and whose value in props is a map is filled the same way. nil props = {}."
+  "props with the default of every `[:map …]` row whose key props lacks, the `:default` of the
+   row type's own props (`[:a [:int {:default 1}]]`); a present key, explicit nil included, is
+   kept. Row = [k type] or [k row-props type]; a row whose type is a `[:map …]` vector and whose
+   value in props is a map is filled the same way. nil props = {}."
   [schema props]
   (reduce (fn [m row]
-            (let [[k row-props type] (row-parts row)]
+            (let [[k _ type] (row-parts row)
+                  type-props (schema-props type)]
               (cond
                 (not (contains? m k))
-                (cond-> m (contains? row-props :default) (assoc k (:default row-props)))
+                (cond-> m (contains? type-props :default) (assoc k (:default type-props)))
 
                 (and (vector? type) (= :map (first type)) (map? (get m k)))
                 (update m k #(with-defaults type %))
@@ -287,24 +313,38 @@
 
 ;; qualified: cljs resolves a macro of the ns being compiled only through its ns name
 (defn-typed.core/tests #'with-defaults
-  [[[[:map [:a {:default 1} :int]] {}]                                  {:a 1}]
-   [[[:map [:a {:default 1} :int]] {:a 2}]                              {:a 2}]
-   [[[:map [:a {:default 1} [:maybe :int]]] {:a nil}]                   {:a nil}]
-   [[[:map [:n [:map [:b {:default "x"} :string]]]] {:n {}}]            {:n {:b "x"}}]
-   [[[:map {:closed true} [:a :int] [:b {:optional true} :int]] nil]    {}]])
+  [[[[:map [:a {:optional true} [:int {:default 1}]]] {}]                          {:a 1}]
+   [[[:map [:a [:int {:min 0 :default 1}]]] {:a 2}]                              {:a 2}]
+   [[[:map [:a [:maybe {:default 1} :int]]] {:a nil}]                            {:a nil}]
+   [[[:map [:n [:map [:b [:string {:default "x"}]]]]] {:n {}}]                   {:n {:b "x"}}]
+   [[[:map [:a {:default 1} :int]] {}]                                           {}]
+   [[[:map {:closed true} [:a :int] [:b {:optional true} :int]] nil]             {}]])
 
-(defn-typed.core/tests #'defaulted-required-keys
-  [[[[:map [:a {:default 1} :int] [:b {:optional true :default 2} :int]]]  [[:a]]]
-   [[[:map [:n [:map [:c {:default "x"} :string]]]]]                      [[:n :c]]]
-   [[:int]                                                                []]])
+(defn-typed.core/tests #'schema-props
+  [[[[:int {:min 1 :default 1}]] {:min 1 :default 1}]
+   [[:int]                        nil]
+   [[[:maybe :int]]               nil]])
+
+(defn-typed.core/tests #'entry-default-paths
+  [[[[:map [:a {:default 1} :int] [:b [:int {:default 2}]]]]  [[:a]]]
+   [[[:map [:n [:map [:c {:default "x"} :string]]]]]         [[:n :c]]]
+   [[:int]                                                   []]])
+
+(defn-typed.core/tests #'defaults-optional
+  [[[[:map {:closed true} [:a :int] [:b [:int {:default 2}]]]]
+    [:map {:closed true} [:a :int] [:b {:optional true} [:int {:default 2}]]]]
+   [[[:map [:c {:optional true} [:maybe :int]]]]
+    [:map [:c {:optional true} [:maybe :int]]]]
+   [[[:map [:n [:map [:b [:string {:default "x"}]]]]]]
+    [:map [:n [:map [:b {:optional true} [:string {:default "x"}]]]]]]
+   [[:int]                                    :int]])
 
 (defn malli-reasons
   "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
-   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data. A key
-   missing from a call whose row carries `:default` without `:optional` reads defaulted-key-rule.
+   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data.
    defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
-   :error-message malli.error/error-message :form malli.core/form}."
-  [{:keys [explain error-message form]} {:keys [type data]}]
+   :error-message malli.error/error-message}."
+  [{:keys [explain error-message]} {:keys [type data]}]
   (let [[schema value single-arg?]
         (case type
           :malli.core/invalid-input [(:input data) (:args data) (= 1 (count (:args data)))]
@@ -314,10 +354,8 @@
     (when schema
       (vec (for [{:keys [in value] :as error} (:errors (explain schema value))
                  :let [path (if single-arg? (vec (rest in)) (vec in))
-                       missing? (= :malli.core/missing-key (:type error))
-                       defaulted? (and missing?
-                                       (some #{[(last in)]} (defaulted-required-keys (form (:schema error)))))]]
-             (str (path-text path) " · " (if defaulted? defaulted-key-rule (error-message error))
+                       missing? (= :malli.core/missing-key (:type error))]]
+             (str (path-text path) " · " (error-message error)
                   (if missing? " · missing" (str " · got " (pr-str value)))))))))
 
 (defn- case-source
@@ -391,8 +429,7 @@
      "The malli fns malli-reasons takes, when malli is on the classpath (test, REPL), else nil."
      []
      (try {:explain (requiring-resolve 'malli.core/explain)
-           :error-message (requiring-resolve 'malli.error/error-message)
-           :form (requiring-resolve 'malli.core/form)}
+           :error-message (requiring-resolve 'malli.error/error-message)}
           (catch Exception _ nil))))
 
 #?(:clj
