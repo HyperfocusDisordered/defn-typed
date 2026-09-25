@@ -1,6 +1,6 @@
 (ns defn-typed.core-test
-  "Runs the in/out cases written next to defn-typed.core's own functions (one `<fn>-inout` test per
-   function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
+  "Runs the in/out cases written next to defn-typed.core's own functions (one `<ns>--<fn>-inout`
+   test per function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
    expand to, and their release form."
   (:require [defn-typed.core :as core :refer [defn-typed defmeta]]
             [clj-kondo.core :as kondo]
@@ -168,6 +168,20 @@
       (core/forget-ns! 'defn-typed.scratch)
       (is (= [] (core/check-ns 'defn-typed.scratch)))
       (finally (remove-ns 'defn-typed.scratch)))))
+
+(deftest deftests-per-namespace
+  (testing "deftests! names each test <ns>--<fn>-inout: functions of one name in two namespaces get two tests in the collecting ns, each running its own cases"
+    (let [collector (create-ns 'defn-typed.twin-tests)]
+      (try
+        (binding [*ns* collector]
+          (run! core/deftests! '[defn-typed.twin-a defn-typed.twin-b]))
+        (is (= '[defn-typed.twin-a--same-inout defn-typed.twin-b--same-inout]
+               (sort (keys (ns-interns collector)))))
+        (is (= {:test 2 :pass 3 :fail 0 :error 0}
+               (binding [clojure.test/*report-counters* (ref clojure.test/*initial-report-counters*)]
+                 (clojure.test/test-vars (vals (ns-interns collector)))
+                 (select-keys @clojure.test/*report-counters* [:test :pass :fail :error]))))
+        (finally (remove-ns 'defn-typed.twin-tests))))))
 
 (defn- malli-symbols
   "Symbols of form (at any depth) whose namespace is a malli one."

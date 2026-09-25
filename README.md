@@ -454,8 +454,9 @@ shape errors as the macro; the `defmeta` hook lints the map as code.
 - `(check-var #'f)` → `{:var sym :cases n :failures [{:i :in :expected :actual}]}`; a throwing
   case → `:actual [:thrown msg]`.
 - `(check-ns 'ns)` → `check-var` over every function of `ns` that has examples.
-- `(deftests! 'ns)` (clj) → one `clojure.test` test `<fn>-inout` per such function, so
-  `clojure -M:test` runs them with the rest of the suite.
+- `(deftests! 'ns)` (clj) → one `clojure.test` test `<ns>--<fn>-inout` per such function, in the
+  namespace that calls it, so `clojure -M:test` runs them with the rest of the suite; the ns in the
+  name keeps two namespaces' functions of one name as two tests.
 - A function with several positional arguments registers its examples with
   `(tests #'f [[[args…] out] …])`; `defmeta` pairs take one argument.
 

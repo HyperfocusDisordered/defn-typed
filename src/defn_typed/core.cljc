@@ -24,7 +24,8 @@
    registered cases win. Works in clj and cljs; this namespace never loads malli: `:malli/schema`
    is plain var metadata until a dev/test/REPL loader runs malli.instrument collect! + instrument!.
    - `check-var` / `check-ns` return data (any REPL, including the browser runtime);
-   - `deftests!` (clj) defines one clojure.test test per such var so run-tests and CI see them;
+   - `deftests!` (clj) defines one clojure.test test `<ns>--<fn>-inout` per such var so run-tests
+     and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
   #?(:clj (:require [clojure.test :as test])
      :cljs (:require-macros [defn-typed.core])))
@@ -869,13 +870,15 @@
 
 #?(:clj
    (defn deftests!
-     "Defines `<fn>-inout` tests in the calling ns for every var of ns-sym with cases."
+     "Defines a test `<ns>--<fn>-inout` in the calling ns for every var of ns-sym with cases: the ns
+      in the name, so functions of one name in two namespaces get two tests in the ns collecting them."
      [ns-sym]
      (require ns-sym)
      (doseq [v (case-vars (concat (registered-vars ns-sym) (vals (ns-interns ns-sym))))]
        (var-cases v)
-       (let [test-var (intern *ns*
-                              (with-meta (symbol (str (name (var-name v)) "-inout"))
+       (let [sym (var-name v)
+             test-var (intern *ns*
+                              (with-meta (symbol (str (namespace sym) "--" (name sym) "-inout"))
                                 {:test #(assert-cases v)})
                               nil)]
          (alter-var-root test-var (constantly #(test/test-var test-var)))))))
