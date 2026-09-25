@@ -8,10 +8,11 @@ Most languages give you one familiar shape for a typed function: name, inputs wi
 output type, body.
 
 ```
-function fizzbuzz(n: number): string      // TypeScript
-fun fizzbuzz(n: Int): String              // Kotlin
-func fizzbuzz(n: Int) -> String           // Swift
-def fizzbuzz(n: int) -> str:              # Python
+function orderTotal({ price, qty = 1, discount = 0 }:
+  { price: number; qty?: number; discount?: number }): number        // TypeScript
+fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int     // Kotlin
+func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int  // Swift
+def order_total(price: int, qty: int = 1, discount: int = 0) -> int: # Python
 ```
 
 Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
@@ -22,11 +23,15 @@ function does, then example inputs and outputs, then the typed function: plain d
 order, nothing else.
 
 ```clojure
-(defn-typed fizzbuzz {
-  :n :int
-} -> :string
+(defn-typed order-total {
+  :price    pos-int?
+  :qty      [{:optional true :default 1} pos-int?]
+  :discount [{:optional true :default 0} [:int {:min 0 :max 100}]]
+} -> :int
   …)
 ```
+
+Same shape, and the signature also says what none of the four can: `discount` is 0 to 100.
 
 ## Forms
 
@@ -58,6 +63,25 @@ Read top to bottom: the task, then its inputs and outputs, then the typed functi
 ```clojure
 (ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
 
+(defmeta order-total
+  {:doc "Order total: price × qty, minus a percent discount."
+   :inout-tests [[{:price 100}                      100]
+                 [{:price 100 :qty 3}               300]
+                 [{:price 100 :qty 3 :discount 10}  270]]})
+
+(defn-typed order-total {
+  :price    pos-int?
+  :qty      [{:optional true :default 1} pos-int?]
+  :discount [{:optional true :default 0} [:int {:min 0 :max 100}]]
+} -> :int
+
+  (quot (* price qty (- 100 discount)) 100))
+```
+
+The smallest one, a single input:
+
+<!-- readme-test -->
+```clojure
 (defmeta fizzbuzz
   {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
    :inout-tests [[{:n 1}  "1"]
