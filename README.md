@@ -140,28 +140,23 @@ A real one, from the app this library was extracted from:
 
 Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
 
-## Grammar
+## Syntax
 
 ```
 (defmeta name {:doc "…" :inout-tests [[in out] …] …other var metadata})
 
-(defn-typed name {
-  key schema
-  key [props schema]
-  …
-} -> out-schema
-
-  body…)
+(defn-typed name {key schema …} -> out-schema body…)
 ```
 
-- **Order**: `defmeta` first, one empty line, then `defn-typed`. `defmeta` declares `name`, so it
-  may precede the definition.
-- **Input** = one map literal, one row per line: `key schema`, or `key [props schema]` for a row
-  with props (a value vector whose first element is a map). Keys are keywords; qualified keys bind
-  by their name (`:x/b` → `b`).
-- **Defaults** = `:default` in the type's own props, `:qty [:int {:min 1 :default 1}]`; that row is optional by itself.
-- **Row props** `key [props schema]` = `{:optional true}` without a default; `:default` there is a compile error.
-- **Output** = any malli schema after `->`, on the line of the closing `}`.
+- `defmeta` goes before the `defn-typed` of the same name: the macro reads it to put `:doc` on
+  the function. `defmeta` declares `name`.
+- **Input** = one map literal `{key schema …}`. Keys are keywords; qualified keys bind by their
+  name (`:x/b` → `b`).
+- **Defaults** = `:default` in the type's own props, `:qty [:int {:min 1 :default 1}]`; that row
+  is optional by itself.
+- **Row props** `key [props schema]` (a value vector whose first element is a map) = `:optional`
+  without a default; `:default` there is a compile error.
+- **Output** = any malli schema after `->`.
 - **Body**: no argument vector — every row key is already a local.
 - **Table props** go on the map as reader metadata; `^{:as sym}` binds the whole defaults-filled
   map (keys beyond the rows included — `[:map …]` is open) to `sym`:
@@ -175,9 +170,9 @@ Both blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verb
     (assoc row :total (* price qty)))
   ```
 
-- **`:inout-tests`**: one `[in out]` pair per line, `in` = the function's single argument (the map;
-  or the scalar of a one-argument plain `defn`). A case passes iff `(= out (f in))`. A non-pair
-  throws naming the var.
+- **`:inout-tests`** = `[in out]` pairs, `in` = the function's single argument (the map; or the
+  scalar of a one-argument plain `defn`). A case passes iff `(= out (f in))`. A non-pair throws
+  naming the var.
 - A docstring, an attr-map or an argument vector inside `defn-typed` is a compile error naming the
   function. Single arity only.
 
