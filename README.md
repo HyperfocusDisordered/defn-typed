@@ -309,7 +309,8 @@ compiles straight to the positional call:
 The values are evaluated in the literal's order, as the map call evaluates them; an absent row
 gets its default. Every other call is the map call: a map that is not a literal, a literal with an
 unknown key or without a required key, a literal that fails the checks below, `apply` and
-higher-order uses, and every call of a function with `^{:as row}` or with a row read at call time.
+higher-order uses, and every call of a function with `^{:as row}`, with a row read at call time, or
+whose body `recur`s to the function (its `recur` takes the map).
 
 The switch:
 
