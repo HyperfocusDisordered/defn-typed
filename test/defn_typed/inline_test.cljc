@@ -603,6 +603,23 @@
                      (catch Exception e (ex-message (or (ex-cause e) e))))))))))
 
 #?(:clj
+   (deftest runtime-unknown-keys-cap
+     (testing ":warn remembers at most the limit's distinct (fn, key set) pairs; the next one prints one final line, then nothing; :error still throws"
+       (with-redefs [defn-typed.core/unknown-keys-report-limit 2
+                     defn-typed.core/unknown-keys-reported (atom {:reported #{} :muted false})]
+         (let [call #(warnings-of (fn [] (keyed %)))]
+           (is (re-find #"unknown key :x1 " (call {:a 1 :x1 1})))
+           (is (re-find #"unknown key :x2 " (call {:a 1 :x2 1})))
+           (is (= "defn-typed: unknown-key warnings muted after 2 distinct reports\n" (call {:a 1 :x3 1})))
+           (is (= "" (call {:a 1 :x4 1})))
+           (is (= "" (call {:a 1 :x1 1})))
+           (is (= {:reported #{} :muted true} @defn-typed.core/unknown-keys-reported) "nothing more is remembered")
+           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"keyed-strict unknown key :x5"
+                                 (keyed-strict (hash-map :a 1 :x5 1)))))))
+     (testing "the limit is 1000"
+       (is (= 1000 defn-typed.core/unknown-keys-report-limit)))))
+
+#?(:clj
    (deftest runtime-unknown-keys-expansion
      (let [expansion (fn [setting]
                        (binding [*ns* (the-ns 'defn-typed.inline-test)]
