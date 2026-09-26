@@ -23,14 +23,14 @@ compile-time literal checks and example tests, and a call costs what a positiona
 
 ```clojure
 (greet {:name 42})
-;; clj-kondo: error: Expected: integer, received: string.
+;; clj-kondo: error: Expected: string, received: positive integer.
 ;; malli: :name · should be a string · got 42
 (greet {:nme "Ann"})
 ;; compiler: WARNING defn-typed …: (greet …) :name — missing required key
 (greet {:name "Ann"})
-;; compiled: (greet {:name "Ann"}) → (greet--positional "Ann")
+;; compiled: (greet {:name "Ann"}) → (let [name__1 "Ann"] (greet--positional name__1))
 (defn-typed greet {:name :string} -> :string (count name))
-;; Typed Clojure: Type mismatch:
+;; Typed Clojure: Type mismatch: Expected: typed.clojure/Str, Actual: (typed.clojure/U Integer Long)
 ```
 
 clj compiles literal calls positionally by default, cljs in release builds, see [Zero-cost calls](#zero-cost-calls).
@@ -123,7 +123,6 @@ clj compiles literal calls positionally by default, cljs in release builds, see 
 ;; compile-time nested default: :qty 1
 (line-total {:item {:price "x"}})
 ;; compiler: WARNING defn-typed … :item :price "x" — should be an integer
-(line-total {:item {:price "x"}})
 ;; clj-kondo: error: Expected: integer, received: string.
 ```
 
