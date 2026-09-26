@@ -65,9 +65,10 @@ The map at the call site is compile-time syntax, not a runtime value. A literal 
 `(order-total {:price 100 :qty 2})` is taken apart when the calling form is compiled: on `require`
 or `load-file`, in the build, or when you evaluate the form in the REPL (ClojureScript: in the
 release build). It becomes a positional call: no hash map is built, no key lookup runs, the call
-costs what a plain `defn` call costs (see Zero-cost calls). Redefining the function does not need
-the callers recompiled, they reach it through the var. Pass a real map (data from JSON, a variable)
-and it is an ordinary call, checked by the same schema at run time while instrumentation is on.
+costs what a plain `defn` call costs (see Zero-cost calls). A body change reaches existing callers
+through the var; a signature change (keys, their order, defaults, the name) needs the callers
+recompiled, as with any positional call. Pass a real map (data from JSON, a variable) and it is an
+ordinary call, checked by the same schema at run time while instrumentation is on.
 
 The schemas are [malli](https://github.com/metosin/malli) schemas: plain data, the most complete
 ready-made schema language in Clojure, and they read as argument declarations. The checks come from
