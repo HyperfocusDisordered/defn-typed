@@ -899,7 +899,8 @@
 
 #?(:clj
    (defn- signature
-     "What a literal call compiled to the positional call depends on, as one string: the spec the
+     "What a literal call compiled to the positional call depends on, as the SHA-256 hex of one
+      string (a constant of bounded size in the defining class, whatever the schemas): the spec the
       call-site expander closes over (expand-call) — the positional fn, each row's key and place,
       its type as written (the literal check judges by it; a runtime row's literal-fill fills by
       it), its absent form (the default written into the call), `:required` / `:runtime`, and the
@@ -907,12 +908,14 @@
       is written `<stem>__#` and a regex prints as its source, so the same source gives the same
       string on every read."
      [spec]
-     (pr-str (clojure.walk/postwalk
-              (fn [x]
-                (if-let [[_ stem] (and (symbol? x) (re-matches #"(.*?)__\d+(?:__auto__)?#?" (name x)))]
-                  (symbol (namespace x) (str stem "__#"))
-                  x))
-              spec))))
+     (let [text (pr-str (clojure.walk/postwalk
+                         (fn [x]
+                           (if-let [[_ stem] (and (symbol? x) (re-matches #"(.*?)__\d+(?:__auto__)?#?" (name x)))]
+                             (symbol (namespace x) (str stem "__#"))
+                             x))
+                         spec))]
+       (apply str (map #(format "%02x" %)
+                       (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes ^String text "UTF-8")))))))
 
 #?(:clj
    (defonce ^:private signatures
