@@ -974,16 +974,19 @@
               meta-keys (dissoc (get @pending-meta q) :inout-tests)
               ;; a real map's keys beyond the rows, reported by name's :unknown-keys; no code for :off
               unknown-keys (let [project (setting :unknown-keys)] (or (:unknown-keys meta-keys) project))
+              ;; m holds a key beyond the rows iff it holds more keys than rows it holds: a count and
+              ;; one contains? per row on the call path, the keys themselves listed only then; clj
+              ;; calls the map's own methods (RT/contains doubles the cost of the whole map call)
               key-check (when (not= :off unknown-keys)
-                          (let [unknown (gensym "unknown")
-                                k (gensym "k")
-                                row-keys (mapv :key rows)]
+                          (let [row-keys (mapv :key rows)
+                                hinted (with-meta m {:tag (if cljs? 'cljs.core/IMap 'clojure.lang.IPersistentMap)})
+                                has? (fn [k] (if cljs? `(contains? ~m ~k) `(.containsKey ~hinted ~k)))]
                             (plumbing
-                             `(when (map? ~m)
-                                (when-let [~unknown (reduce-kv (fn [~unknown ~k ~'_]
-                                                                 (case ~k ~(apply list row-keys) ~unknown (conj (or ~unknown []) ~k)))
-                                                               nil ~m)]
-                                  (report-unknown-keys! {:fn '~q :mode ~unknown-keys :unknown-keys ~unknown :keys ~row-keys}))))))
+                             `(when (and (map? ~m)
+                                         (not (== ~(if cljs? `(count ~m) `(.count ~hinted))
+                                                  (+ ~@(map (fn [k] `(if ~(has? k) 1 0)) row-keys)))))
+                                (report-unknown-keys! {:fn '~q :mode ~unknown-keys :keys ~row-keys
+                                                       :unknown-keys (into [] (remove ~(set row-keys)) (keys ~m))})))))
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
               spec (cond-> {:name q :props q-props
                             :rows (mapv #(select-keys % [:key :index :type :absent :required :runtime]) rows)}
