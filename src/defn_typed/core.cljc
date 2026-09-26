@@ -108,26 +108,51 @@
   #?(:clj (binding [*out* *err*] (println text))
      :cljs (js/console.error text)))
 
-(defonce ^{:doc "The [fn #{unknown key …}] pairs report-unknown-keys! has printed: one line each per process."}
+(def unknown-keys-report-limit
+  "How many distinct (fn, set of unknown keys) pairs `:unknown-keys :warn` remembers and prints per
+   process, 1000. It exists for memory and log volume: callers that pass generated keys (ids as
+   keys, keys built from data) would otherwise grow the remembered set and the log without end.
+   Past it, one line says the warnings are muted and nothing more is printed or remembered."
+  1000)
+
+(defonce ^{:doc "`{:reported #{[fn #{unknown key …}] …} :muted bool}`: the pairs report-unknown-keys!
+   has printed (one line each per process), and whether it stopped at unknown-keys-report-limit
+   (then the set is dropped)."}
   unknown-keys-reported
-  (atom #{}))
+  (atom {:reported #{} :muted false}))
+
+(defn- remember-report
+  "state with the pair reported recorded: already known or muted → as it is; under the limit →
+   added; at the limit → muted, the pairs dropped."
+  [{:keys [reported muted] :as state} pair]
+  (cond
+    (or muted (contains? reported pair)) state
+    (< (count reported) unknown-keys-report-limit) (update state :reported conj pair)
+    :else {:reported #{} :muted true}))
 
 (defn report-unknown-keys!
   "Reports the keys of a real map a defn-typed function got that are not rows of its input, as its
    `:unknown-keys` setting (mode) says: `:warn` prints `defn-typed: <ns/fn> unknown key :k — the keys
-   are :a :b` once per (fn, set of unknown keys) per process (clj stderr, cljs console.warn) and the
-   call proceeds; `:error` throws an ex-info of that text with `{:fn :unknown-keys :keys}`."
+   are :a :b` once per (fn, set of unknown keys) per process (clj stderr, cljs console.warn), up to
+   unknown-keys-report-limit pairs, then one muted line and nothing more; the call proceeds.
+   `:error` throws an ex-info of that text with `{:fn :unknown-keys :keys}`, every time."
   [{fn-name :fn row-keys :keys :keys [mode unknown-keys]}]
   (let [text (str "defn-typed: " fn-name " unknown key" (when (next unknown-keys) "s") " "
                   (apply str (interpose " " (map pr-str unknown-keys)))
                   " — the keys are " (apply str (interpose " " (map pr-str row-keys))))]
     (if (= :error mode)
       (throw (ex-info text {:fn fn-name :unknown-keys unknown-keys :keys row-keys}))
-      (let [reported [fn-name (set unknown-keys)]
-            [before] (swap-vals! unknown-keys-reported conj reported)]
-        (when-not (contains? before reported)
-          #?(:clj (binding [*out* *err*] (println text))
-             :cljs (js/console.warn text)))))))
+      (let [pair [fn-name (set unknown-keys)]
+            [before after] (swap-vals! unknown-keys-reported remember-report pair)
+            line (cond
+                   (and (:muted after) (not (:muted before)))
+                   (str "defn-typed: unknown-key warnings muted after " unknown-keys-report-limit " distinct reports")
+                   (not= (:reported before) (:reported after)) text
+                   ;; known pair, or muted: nothing to print
+                   :else nil)]
+        (when line
+          #?(:clj (binding [*out* *err*] (println line))
+             :cljs (js/console.warn line)))))))
 
 (defonce ^{:doc "The fn that builds the checker of a `:malli-in-prod` function from its slot's spec, or nil.
    `defn-typed.malli-in-prod` sets it when it loads; this namespace never loads malli."}
