@@ -186,11 +186,11 @@
   (testing "an opted-in function is never rewritten to the positional call, switch on or off"
     (with-redefs [core/inline-on? (constantly true)]
       (is (= ['.invoke `order-total '{:price 1}] (vec ((:inline (meta #'order-total)) '{:price 1}))))
-      (is (= `padded-probe--positional
-             (first (last ((:inline (meta (binding [*ns* (the-ns 'defn-typed.malli-in-prod-test)]
-                                            (eval '(do (defn-typed.core/defn-typed padded-probe {:a :int} -> :int a)
-                                                    (var padded-probe))))))
-                           '{:a 1}))))
+      (is (= `(padded-probe--positional 1)
+             ((:inline (meta (binding [*ns* (the-ns 'defn-typed.malli-in-prod-test)]
+                               (eval '(do (defn-typed.core/defn-typed padded-probe {:a :int} -> :int a)
+                                       (var padded-probe))))))
+              '{:a 1}))
           "a function without it is"))))
 
 (deftest defmeta-rejects-a-bad-malli-in-prod

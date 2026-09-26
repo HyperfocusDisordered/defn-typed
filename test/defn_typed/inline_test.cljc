@@ -295,7 +295,7 @@
      (testing "the :inline expander: off → a host call on the var (never expanded again), on → the positional call"
        (let [form ((:inline (meta #'padded)) '{:a 1})]
          (if inline?
-           (is (= `padded--positional (first (last form))))
+           (is (= `(padded--positional 1 2 nil) form))
            (is (= ['.invoke `padded {:a 1}] (vec form))))))
      (testing "a key beyond the rows, or one that is not a keyword literal: the map call, switch on or off"
        (is (= ['.invoke `padded '{:a 1 :zz 2}] (vec ((:inline (meta #'padded)) '{:a 1 :zz 2}))))
@@ -306,8 +306,30 @@
      (testing "switch on: a literal call whose nested literal items leave a defaulted key out compiles to the positional call with the default filled in the literal"
        (when inline?
          (let [form ((:inline (meta #'cart-total)) '{:items [{:price 100}]})]
-           (is (= `cart-total--positional (first (last form))))
-           (is (= '[[{:price 100 :qty 1}]] (vec (take-nth 2 (rest (second form)))))))))))
+           (is (= `(cart-total--positional [{:price 100 :qty 1}]) form)))))))
+
+#?(:clj
+   (deftest literal-call-shape
+     (with-redefs [defn-typed.core/inline-on? (constantly true)]
+       (binding [*err* (java.io.StringWriter.)]
+         (testing "every value a constant or a symbol: the positional call itself, no let; an absent row = its default form"
+           (is (= `(padded--positional 1 2 nil) ((:inline (meta #'padded)) '{:a 1})))
+           (is (= `(padded--positional ~'x 5 ~'y) ((:inline (meta #'padded)) '{:c y :b 5 :a x})))
+           (is (= `(order-total--positional ~'p 1 0) ((:inline (meta #'order-total)) '{:price p}))))
+         (testing "a value that is a call keeps the let: each value evaluated once, in the literal's order"
+           (let [form ((:inline (meta #'padded)) '{:b (inc x) :a 1})]
+             (is (= `let (first form)))
+             (is (= `padded--positional (first (last form))))
+             (is (= '[(inc x) 1] (vec (take-nth 2 (rest (second form))))))))
+         (testing "cljs: the same two shapes"
+           (let [spec {:name `padded :props `padded-props :positional `padded--positional
+                       :rows [{:key :a :index 1 :type :int :required true}
+                              {:key :b :index 2 :type [:int {:default 2}] :absent 2}
+                              {:key :c :index 3 :type [:maybe :int] :absent nil}]}
+                 expand #(defn-typed.core/expand-call {:spec spec :arg % :fallback :map-call :cljs? true :file "f" :line 1})]
+             (is (= `(padded--positional 1 2 nil) (expand '{:a 1})))
+             (is (= `(padded--positional ~'x 2 nil) (expand '{:a x})))
+             (is (= `let (first (expand '{:a (inc x)}))))))))))
 
 #?(:clj
    (defn- with-property
@@ -321,10 +343,10 @@
 #?(:clj
    (deftest literal-is-positional-by-default
      (testing "property unset: a fitting literal compiles to the positional call; `false`: the map call through the var"
-       (is (= `padded--positional
+       (is (= `(padded--positional 1 2 nil)
               ;; *err*: the once-per-JVM instrumentation line, when malli.instrument is loaded
-              (first (last (binding [*err* (java.io.StringWriter.)]
-                             (with-property "defn-typed.inline" nil #((:inline (meta #'padded)) '{:a 1})))))))
+              (binding [*err* (java.io.StringWriter.)]
+                (with-property "defn-typed.inline" nil #((:inline (meta #'padded)) '{:a 1})))))
        (is (= ['.invoke `padded '{:a 1}]
               (vec (with-property "defn-typed.inline" "false" #((:inline (meta #'padded)) '{:a 1}))))))))
 
@@ -606,9 +628,9 @@
        (let [expand #((:inline (meta #'padded)) '{:a 1})]
          (with-project-settings {:inline false}
            #(do (is (= ['.invoke `padded '{:a 1}] (vec (expand))))
-                (is (= `padded--positional
-                       (first (last (binding [*err* (java.io.StringWriter.)]
-                                      (with-property "defn-typed.inline" "true" expand))))))))
+                (is (= `(padded--positional 1 2 nil)
+                       (binding [*err* (java.io.StringWriter.)]
+                         (with-property "defn-typed.inline" "true" expand))))))
          (with-project-settings {:inline true}
            #(is (= ['.invoke `padded '{:a 1}] (vec (with-property "defn-typed.inline" "false" expand)))))))))
 
