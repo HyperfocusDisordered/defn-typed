@@ -26,13 +26,6 @@
   n
 )
 
-(defn-typed whole ^{:as row} {
-  :a :int
-  :b [:int {:default 2}]
-} -> :any
-  [a b row]
-)
-
 (def shared-type [:int {:default 7}])
 
 (defn-typed via-symbol {:k shared-type} -> :any
@@ -82,7 +75,7 @@
      (if (pos? n) (again {:n (dec n)}) n)
    ))
 
-(defn-typed closed-pair ^{:closed true} {:a :int :b [:int {:max 9 :default 1}]} -> :any
+(defn-typed pair {:a :int :b [:int {:max 9 :default 1}]} -> :any
   [a b]
 )
 
@@ -123,9 +116,6 @@
     (is (= {:d "x"} (nested {:n {}})))
     (is (= {:d "y"} (nested {:n {:d "y"}})))
     (is (nil? (nested {}))))
-  (testing "^{:as row} binds the whole filled map, a real map's keys beyond the rows included (a literal call flags them)"
-    (let [m {:a 1 :z 9}]
-      (is (= [1 2 {:a 1 :b 2 :z 9}] (whole m)))))
   (testing "a row typed by a symbol reads its default from the evaluated schema"
     (is (= 7 (via-symbol {})))
     (is (= 8 (via-symbol {:k 8}))))
@@ -282,21 +272,19 @@
      (testing "a literal with an unknown key, a missing required key, or a constant value its row rejects prints one warning; the call still compiles to the map call"
        (is (re-find #"^WARNING defn-typed .*: \(order-total …\) :qty 0 — should be at least 1\n$"
                     (compile-warnings '(order-total {:price 100 :qty 0}))))
-       (is (re-find #"\(closed-pair …\) :zz — unknown key\n$"
-                    (compile-warnings '(closed-pair {:a 1 :zz 1}))))
+       (is (re-find #"\(pair …\) :zz — unknown key\n$"
+                    (compile-warnings '(pair {:a 1 :zz 1}))))
        (is (re-find #"\(order-total …\) :price — missing required key\n$"
                     (compile-warnings '(order-total {:qty 2}))))
        (is (re-find #"\(order-total …\) :price \"100\" — should be an integer\n$"
                     (compile-warnings '(order-total {:price "100"}))))
-       (is (re-find #"\(closed-pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9\n$"
-                    (compile-warnings '(closed-pair {:zz 1 :b 10}))))
+       (is (re-find #"\(pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9\n$"
+                    (compile-warnings '(pair {:zz 1 :b 10}))))
        (is (re-find #"\(order-total …\) :zz — unknown key; :price — missing required key; :discount 101 — should be at most 100\n$"
                     (compile-warnings '(order-total {:zz 1 :discount 101})))))
-     (testing "a key beyond the rows is an unknown key, the input map open or closed; a key that is not a keyword literal may be any key"
+     (testing "a key beyond the rows is an unknown key; a key that is not a keyword literal may be any key"
        (is (re-find #"^WARNING defn-typed .*: \(order-total …\) :discont — unknown key\n$"
                     (compile-warnings '(order-total {:price 100 :discont 10}))))
-       (is (re-find #"\(whole …\) :z — unknown key\n$"
-                    (compile-warnings '(whole {:a 1 :z 3}))))
        (is (= "" (compile-warnings '(let [k :price] (order-total {k 100})))))
        (is (= "" (compile-warnings '(via-symbol {})))))
      (testing "a reason is `<key> <value> — <text>`: a part inside the value leads with its path; a part malli has no message for reads `does not match <schema as written>`"
@@ -402,8 +390,8 @@
        (with-project-settings {:literal-check :error}
          #(do (is (re-find #"^defn-typed .*: \(order-total …\) :qty 0 — should be at least 1$"
                            (str (compile-error '(order-total {:price 100 :qty 0})))))
-              (is (re-find #"^defn-typed .*: \(closed-pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9$"
-                           (str (compile-error '(closed-pair {:zz 1 :b 10})))))
+              (is (re-find #"^defn-typed .*: \(pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9$"
+                           (str (compile-error '(pair {:zz 1 :b 10})))))
               (is (re-find #"^defn-typed .*: \(order-total …\) :discont — unknown key$"
                            (str (compile-error '(order-total {:price 100 :discont 10})))))
               (is (nil? (compile-error '(order-total {:price 100 :qty 2}))))

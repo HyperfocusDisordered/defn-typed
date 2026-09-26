@@ -21,7 +21,6 @@
                  [{:a 1 :b 5} 6]]})
 
 (defn-typed padded
-  ^{:closed true}
   {:a :int
    :b [:int {:default 2}]} -> :int
 
@@ -49,8 +48,8 @@
   (swap! core/registry dissoc `incremented))
 
 (deftest defn-typed-expansion
-  (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
-    (is (= [:map {:closed true} [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
+  (testing "the input map turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
+    (is (= [:map [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
     ;; cljs var metadata keeps the source form; malli's collect! evaluates it (see below)
     (is (= '[:=> [:cat padded-props] :int] (:malli/schema (meta #'padded))))
     (testing "the arglist is the rows as a destructuring map, so doc shows the inputs"
@@ -70,12 +69,15 @@
 (deftest defn-typed-schema-is-instrumented
   (mi/instrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]})
   (try
-    (testing "a good call passes (a defaulted key may be absent: the macro made its row :optional), an unknown key is rejected as :malli.core/invalid-input"
+    (testing "a good call passes (a defaulted key may be absent: the macro made its row :optional), a real map's key beyond the rows passes (the map is open), a wrong type is rejected as :malli.core/invalid-input"
       (is (= 3 (padded {:a 1})))
       (is (= 6 (padded {:a 1 :b 5})))
-      (let [data (try (padded {:a 1 :c 3}) nil
+      (let [m {:a 1 :c 3}]
+        (is (= 3 (padded m))))
+      (let [m {:a "x"}
+            data (try (padded m) nil
                       (catch :default e (ex-data e)))]
         (is (= :malli.core/invalid-input (:type data)))
-        (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))))
+        (is (= [{:a "x"}] (vec (:args (:data data)))))))
     (finally
       (mi/unstrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]}))))

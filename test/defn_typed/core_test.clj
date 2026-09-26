@@ -17,7 +17,6 @@
                  [{:a 1 :b 5} 6]]})
 
 (defn-typed padded
-  ^{:closed true}
   {:a :int
    :b [:int {:default 2}]} -> :int
 
@@ -47,15 +46,15 @@
   (swap! core/registry dissoc `incremented))
 
 (deftest defn-typed-expansion
-  (testing "the input map (its metadata = the table's own props) turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
-    (is (= [:map {:closed true} [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
+  (testing "the input map turns into [:map …], def'd as <name>-props and referenced from :malli/schema"
+    (is (= [:map [:a :int] [:b {:optional true} [:int {:default 2}]]] padded-props))
     (is (= [:=> [:cat padded-props] :int] (:malli/schema (meta #'padded))))
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
     (is (= '([{:keys [a b]}]) (:arglists (meta #'padded)))))
-  (testing "the arglist is the rows as a destructuring map, so doc shows the inputs; ^{:as row} adds :as, a qualified key reads as its binding"
+  (testing "the arglist is the rows as a destructuring map, so doc shows the inputs; a qualified key reads as its binding"
     (is (str/includes? (with-out-str (clojure.repl/doc padded)) "([{:keys [a b]}])"))
-    (is (= ''([{:keys [a x/b] :as row}])
-           (:arglists (nth (last (macroexpand-1 '(defn-typed.core/defn-typed f ^{:as row} {:a :int :x/b :int} -> :any row))) 2)))))
+    (is (= ''([{:keys [a x/b]}])
+           (:arglists (nth (last (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int :x/b :int} -> :any a))) 2)))))
   (testing "a map without metadata turns into a bare [:map …] in entry order; `key [props schema]` is a row with props; every row key is a local, a qualified key by its name"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int :x/b [{:optional true} :int]} -> :any [a b]))]
       (is (= '(def f-props [:map [:a :int] [:x/b {:optional true} :int]]) (second expansion)))
@@ -76,7 +75,7 @@
   (testing "defaults come from the row type's own props; the absent key is filled"
     (is (= 3 (padded {:a 1})))
     (is (= 6 (padded {:a 1 :b 5}))))
-  (testing "a docstring, an input that is not one map (a vector, [:map …], a symbol, two forms), no rows, a non-keyword key, a bad [props schema], :default in a row's entry props (nested included), an argument vector, a missing ->, or nothing after ->, fails at compile time naming the fn"
+  (testing "a docstring, an input that is not one map (a vector, [:map …], a symbol, two forms), metadata on the input map, no rows, a non-keyword key, a bad [props schema], :default in a row's entry props (nested included), an argument vector, a missing ->, or nothing after ->, fails at compile time naming the fn"
     (doseq [[form message] [['(defn-typed.core/defn-typed f "doc" {:a :int} -> :any a) #"docstring goes to defmeta"]
                             ['(defn-typed.core/defn-typed f [[:a :int]] -> :any a) #"the input is a map: \{key schema …\}"]
                             ['(defn-typed.core/defn-typed f [:map [:a :int]] -> :any a) #"the input is a map"]
@@ -84,7 +83,8 @@
                             ['(defn-typed.core/defn-typed f {:a :int} {:b :int} -> :any a) #"the input is a map"]
                             ['(defn-typed.core/defn-typed f -> :any a) #"no input rows"]
                             ['(defn-typed.core/defn-typed f {} -> :any a) #"no input rows in the map"]
-                            ['(defn-typed.core/defn-typed f ^{:closed true} {} -> :any a) #"no input rows in the map"]
+                            ['(defn-typed.core/defn-typed f ^{:as row} {:a :int} -> :any a) #"metadata on the argument table is not supported"]
+                            ['(defn-typed.core/defn-typed f ^:private {:a :int} -> :any a) #"metadata on the argument table is not supported"]
                             ['(defn-typed.core/defn-typed f {"a" :int} -> :any a) #"a key of the input map is a keyword, got \"a\""]
                             ['(defn-typed.core/defn-typed f {:a [{:optional true}]} -> :any a) #"a row with props is :a \[props schema\]"]
                             ['(defn-typed.core/defn-typed f {:a [{:optional true :default 1} :int]} -> :any a) #":a · put :default into the schema's props: \[:int \{:default v\}\]$"]
@@ -128,15 +128,18 @@
   (mi/collect! {:ns ['defn-typed.core-test]})
   (mi/instrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]})
   (try
-    (testing "a good call passes (a defaulted key may be absent: the macro made its row :optional), an unknown key is rejected as :malli.core/invalid-input"
+    (testing "a good call passes (a defaulted key may be absent: the macro made its row :optional), a real map's key beyond the rows passes (the map is open), a wrong type is rejected as :malli.core/invalid-input"
       (is (= 3 (padded {:a 1})))
       (is (= 6 (padded {:a 1 :b 5})))
-      (let [data (try (padded {:a 1 :c 3}) nil
+      (let [m {:a 1 :c 3}]
+        (is (= 3 (padded m))))
+      (let [m {:a "x"}
+            data (try (padded m) nil
                       (catch clojure.lang.ExceptionInfo e (assoc (ex-data e) :message (ex-message e))))]
         (is (= :malli.core/invalid-input (:type data)))
-        (is (= [{:a 1 :c 3}] (vec (:args (:data data)))))
+        (is (= [{:a "x"}] (vec (:args (:data data)))))
         (testing "malli-reasons: one `<key path> · <message> · got <value>` line per failing key"
-          (is (= [":c · disallowed key · got 3"] (core/malli-reasons (core/malli-fns) data))))))
+          (is (= [":a · should be an integer · got \"x\""] (core/malli-reasons (core/malli-fns) data))))))
     (testing "a row whose props slot or type is a symbol and carries a default is optional in <name>-props, so an instrumented call may leave it out"
       (is (= [:map [:q {:optional true} [:int {:default 3}]] [:k {:optional true} [:int {:default 7}]]] symslot-props))
       (is (= [3 7] (symslot {}))))
@@ -235,14 +238,15 @@
              (lint "(defn-typed f {:a :int :b} -> :any a)")))
       (is (= [others [4 "defn-typed: :x/b and :y/b both bind b"]]
              (lint "(defn-typed f {:x/b :int :y/b :int} -> :any b)")))
-      (is (= [others [4 "defn-typed: :a and ^{:as a} both bind a"]]
-             (lint "(defn-typed f ^{:as a} {:a :int} -> :any a)")))))
+      (is (= [others [4 "defn-typed: metadata on the argument table is not supported; declare data as a row, e.g. {:row :map}"]]
+             (lint "(defn-typed f ^{:closed true} {:a :int} -> :any a)")))))
   (testing "the macro throws a compile error naming the same problem (an odd map literal is the reader's error)"
     (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
       (is (= "defmeta 5: the first argument must be the function's name" (error '(defn-typed.core/defmeta 5 {:doc "x"}))))
       (is (= "defn-typed: the first argument must be the function's name, got nothing" (error '(defn-typed.core/defn-typed))))
       (is (= "defn-typed f: :x/b and :y/b both bind b" (error '(defn-typed.core/defn-typed f {:x/b :int :y/b :int} -> :any b))))
-      (is (= "defn-typed f: :a and ^{:as a} both bind a" (error '(defn-typed.core/defn-typed f ^{:as a} {:a :int} -> :any a))))
+      (is (= "defn-typed f: metadata on the argument table is not supported; declare data as a row, e.g. {:row :map}"
+             (error '(defn-typed.core/defn-typed f ^{:closed true} {:a :int} -> :any a))))
       (is (= "Map literal must contain an even number of forms"
              (try (read-string "(defn-typed f {:a :int :b} -> :any a)") (catch Exception e (ex-message e))))))))
 
