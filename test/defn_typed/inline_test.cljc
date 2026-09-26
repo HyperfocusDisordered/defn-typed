@@ -22,6 +22,14 @@
   [a b c]
 )
 
+;; cases above a definition: a release build drops their registration and their run at load
+;; (`grep -c inout_check` on the release bundle = 0)
+(defmeta tagged {:inout-tests [[{:tag "kept"} "kept"]]})
+
+(defn-typed tagged {:tag :string} -> :string
+  tag
+)
+
 (defn-typed nested {:n [:map [:d [:string {:default "x"}]]]} -> :any
   n
 )

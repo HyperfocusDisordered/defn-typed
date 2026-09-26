@@ -249,6 +249,13 @@
           debug-gated? #(and (seq? %) (= 'clojure.core/when (first %)) (= 'goog.DEBUG (second %)))
           cljs (expand {:ns {:name 'app.core}})
           clj (expand nil)]
+      (testing "the defn-typed below it runs the cases at load under goog.DEBUG in cljs, plainly in clj"
+        (let [inout-call (fn [env] (some #(when (and (seq? %) (some (fn [f] (and (seq? f) (= `core/inout-check! (first f))))
+                                                                      (tree-seq seq? seq %)))
+                                             %)
+                                         (rest (@#'defn-typed '(defn-typed g {:a :int} -> :int a) env 'g '{:a :int} '-> :int 'a))))]
+          (is (debug-gated? (inout-call {:ns {:name 'app.core}})))
+          (is (= `core/inout-check! (first (inout-call nil))))))
       (swap! @#'core/pending-meta dissoc 'app.core/g `g)
       (is (= 2 (count (filter debug-gated? cljs))))
       (is (= [] (filter debug-gated? clj)))

@@ -1238,11 +1238,11 @@
 #?(:clj
    (defn- load-scope
      "What identifies the file being loaded or compiled where a macro expands: the thread binding of
-      clj `*file*` (Compiler.load binds it once per file) or cljs `cljs.analyzer/*cljs-file*` (bound
-      once per file compile), identical for every form of one load and new on the next; nil outside
-      a file (a form typed into a REPL)."
+      clj `*file*` (Compiler.load binds it once per file) or cljs `cljs.analyzer/*file-defs*` (bound
+      once per file compile; shadow-cljs rebinds `*cljs-file*` per form), identical for every form
+      of one load and new on the next; nil outside a file (a form typed into a REPL)."
      [cljs?]
-     (some-> ^clojure.lang.Var (if cljs? (resolve 'cljs.analyzer/*cljs-file*) #'*file*) .getThreadBinding)))
+     (some-> ^clojure.lang.Var (if cljs? (resolve 'cljs.analyzer/*file-defs*) #'*file*) .getThreadBinding)))
 
 #?(:clj
    (defn- dev-only
@@ -1257,7 +1257,7 @@
      [env]
      (when (:ns env)
        (let [ns-sym (-> env :ns :name)
-             defs (get-in @@(resolve 'cljs.env/*compiler*) [:cljs.analyzer/namespaces ns-sym :defs])]
+             defs (get-in (some-> (resolve 'cljs.env/*compiler*) deref deref) [:cljs.analyzer/namespaces ns-sym :defs])]
          (vec (for [[sym {:keys [declared]}] (sort-by key defs) :when declared]
                 `(var ~(symbol (str ns-sym) (str sym)))))))))
 
