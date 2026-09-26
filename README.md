@@ -7,6 +7,71 @@
 Typed functions for Clojure: one signature gives you static checks, runtime contracts,
 compile-time literal checks and example tests, and a call costs what a positional call costs.
 
+## Why
+
+Most languages give you one familiar shape for a typed function: name, inputs with their types,
+output type, body.
+
+TypeScript
+
+```typescript
+function orderTotal({ price, qty = 1, discount = 0 }:
+  { price: number; qty?: number; discount?: number }): number
+```
+
+Kotlin
+
+```kotlin
+fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int
+```
+
+Swift
+
+```swift
+func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int
+```
+
+Python
+
+```python
+def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
+```
+
+Clojure has no such form. The checkers exist: clj-kondo, Typed Clojure and malli check keys, types
+and values well, but each wants its own description written apart from the function. defn-typed
+gives you the familiar shape once and hands each tool its own form of it:
+
+- **static checks**: clj-kondo flags wrong keys and types as you type (see Static checking);
+- **type checking** (optional, clj): Typed Clojure checks bodies and call sites against the same
+  signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
+- **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
+  during the build (see Compile-time literal checks);
+- **runtime contracts**: malli checks every call in the REPL and in tests;
+- **example tests**: the `[in out]` pairs above the function run as tests;
+- **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
+  as a plain `defn` (see Zero-cost calls).
+
+The schemas are [malli](https://github.com/metosin/malli) schemas: malli does the validation, the
+error messages and the instrumentation. What the function does, then example inputs and outputs,
+then the typed function: plain data, in that order, nothing else.
+
+```clojure
+(defn-typed order-total {
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+```
+
+Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
+range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
+after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
+nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
+functions in, see malli in production). Literal calls such
+as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
+checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
+see Static checking.
+
 ## Examples
 
 ### Micro — `greet`
@@ -153,71 +218,6 @@ A real one, from the app this library was extracted from:
 ```
 
 The five blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
-
-## Why
-
-Most languages give you one familiar shape for a typed function: name, inputs with their types,
-output type, body.
-
-TypeScript
-
-```typescript
-function orderTotal({ price, qty = 1, discount = 0 }:
-  { price: number; qty?: number; discount?: number }): number
-```
-
-Kotlin
-
-```kotlin
-fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int
-```
-
-Swift
-
-```swift
-func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int
-```
-
-Python
-
-```python
-def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
-```
-
-Clojure has no such form. The checkers exist: clj-kondo, Typed Clojure and malli check keys, types
-and values well, but each wants its own description written apart from the function. defn-typed
-gives you the familiar shape once and hands each tool its own form of it:
-
-- **static checks**: clj-kondo flags wrong keys and types as you type (see Static checking);
-- **type checking** (optional, clj): Typed Clojure checks bodies and call sites against the same
-  signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
-- **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
-  during the build (see Compile-time literal checks);
-- **runtime contracts**: malli checks every call in the REPL and in tests;
-- **example tests**: the `[in out]` pairs above the function run as tests;
-- **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
-  as a plain `defn` (see Zero-cost calls).
-
-The schemas are [malli](https://github.com/metosin/malli) schemas: malli does the validation, the
-error messages and the instrumentation. What the function does, then example inputs and outputs,
-then the typed function: plain data, in that order, nothing else.
-
-```clojure
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-```
-
-Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
-range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
-after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
-nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
-functions in, see malli in production). Literal calls such
-as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
-checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
-see Static checking.
 
 ## Forms
 
