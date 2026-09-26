@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 (2026-09-26)
+
+- `defn-typed` arglists show the real row names, and generated in/out test names use `<ns>--<fn>-inout`.
+- clj literal calls inline by default (`-Ddefn-typed.inline=false` turns it off); inlining while `malli.instrument` is loaded prints one stderr warning.
+- cljs release builds rewrite `:refer`red literal calls to positional calls.
+- `defn-typed.edn` project configuration supports `:literal-check :warn|:error` and `:inline`, looked up from the working directory up; property settings take precedence over the file, which takes precedence over defaults.
+- Literal checks walk nested map literals and report the full key path.
+- Typed Clojure support marks generated plumbing `^:typed.clojure/ignore`; optional `defn-typed.typed-clojure` provides `install!` and `check-form!`, while the library itself does not depend on Typed Clojure.
+
 ## 0.3.0 (2026-09-25)
 
 - malli in production: `:malli-in-prod true` (or `{:sample 0.01 :redact #{:phone}}`) in a
