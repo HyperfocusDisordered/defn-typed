@@ -2,11 +2,12 @@
   "Runs the in/out cases written next to defn-typed.core's own functions (one `<ns>--<fn>-inout`
    test per function with cases). Below them: the pair format itself, what `defn-typed` and `defmeta`
    expand to, and their release form."
-  (:require [defn-typed.core :as core :refer [defn-typed defmeta]]
+  (:require [defn-typed.core :as core :refer [defn-typed defnt defmeta]]
             [clj-kondo.core :as kondo]
             [clojure.repl]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.walk]
             [malli.instrument :as mi]))
 
 (core/deftests! 'defn-typed.core)
@@ -253,7 +254,7 @@
   "[row message] of each clj-kondo finding for code (a refer the snippet leaves unused, row 1, not
    included), linted with the exported hooks only."
   [code]
-  (->> (with-in-str (str "(ns k (:require [defn-typed.core :refer [defn-typed defmeta]]))\n" code)
+  (->> (with-in-str (str "(ns k (:require [defn-typed.core :refer [defn-typed defnt defmeta]]))\n" code)
          (kondo/run! {:lint ["-"] :lang :clj :cache false
                       :config-dir "resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed"}))
        :findings
@@ -285,6 +286,56 @@
              (error '(defn-typed.core/defn-typed f ^{:closed true} {:a :int} -> :any a))))
       (is (= "Map literal must contain an even number of forms"
              (try (read-string "(defn-typed f {:a :int :b} -> :any a)") (catch Exception e (ex-message e))))))))
+
+(defmeta shorter
+  {:doc "a + b under the short name, b defaulting to 2."
+   :inout-tests [[{:a 1}      3]
+                 [{:a 1 :b 5} 6]]})
+
+(defnt shorter {
+  :a :int
+  :b [:int {:default 2}]
+} -> :int
+  (+ a b)
+)
+
+(defn- gensyms-numbered
+  "form with every gensym'd symbol (`m1234`, `arg__1234__auto__`) renamed by order of first
+   appearance, so two expansions compare equal iff they differ only in gensym numbers."
+  [form]
+  (let [seen (atom {})]
+    (clojure.walk/postwalk
+     (fn [x]
+       (if-let [[_ prefix] (and (symbol? x) (nil? (namespace x)) (re-matches #"(.*?)\d+(?:__auto__)?" (name x)))]
+         (or (@seen x) ((swap! seen assoc x (symbol (str prefix "#" (count @seen)))) x))
+         x))
+     form)))
+
+(deftest defnt-is-defn-typed
+  (testing "(defnt …) expands to exactly what (defn-typed …) of the same form expands to (gensym numbers aside)"
+    (let [expand #(binding [*ns* (the-ns 'defn-typed.core-test)]
+                    (macroexpand-1 (list* % 'f '({:a :int :b [:int {:default 2}]} -> :int (+ a b)))))
+          typed (expand 'defn-typed.core/defn-typed)]
+      (is (= (gensyms-numbered typed) (gensyms-numbered (expand 'defn-typed.core/defnt))))
+      (is (not= typed (gensyms-numbered typed)) "the expansion holds gensyms: the renaming is what makes them comparable")))
+  (testing "a defnt function is a defn-typed function: <name>-props, :malli/schema, the defmeta's :doc and cases, defaults"
+    (is (= [:map [:a :int] [:b {:optional true} [:int {:default 2}]]] shorter-props))
+    (is (= [:=> [:cat shorter-props] :int] (:malli/schema (meta #'shorter))))
+    (is (= "a + b under the short name, b defaulting to 2." (:doc (meta #'shorter))))
+    (is (= {:var `shorter :cases 2 :failures []} (core/check-var #'shorter)))
+    (is (= 3 (shorter {:a 1}))))
+  (testing "defnt is a macro whose compile errors are defn-typed's"
+    (is (:macro (meta #'defnt)))
+    (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
+      (is (= (error '(defn-typed.core/defn-typed)) (error '(defn-typed.core/defnt))))
+      (is (= "defn-typed f: :x/b and :y/b both bind b" (error '(defn-typed.core/defnt f {:x/b :int :y/b :int} -> :any b))))))
+  (testing "the exported clj-kondo hooks lint (defnt …) as (defn-typed …): the same findings"
+    (doseq [form ["(%s f {\"a\" :int} -> :any a)"
+                  "(%s f {:a :int} -> :int b)"
+                  "(%s f {:a :int} -> :int a)\n(f {:a 1} 2)"]]
+      (let [typed (hook-findings (format form "defn-typed"))]
+        (is (seq typed) form)
+        (is (= typed (hook-findings (format form "defnt"))) form)))))
 
 (deftest cljs-expander-decides-per-compile
   (testing "a JVM that ran a release (the expander interned) and then compiles in dev: the dev call is the plain call, no check, no rewrite"

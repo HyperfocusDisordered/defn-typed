@@ -2,7 +2,7 @@
   "Typed Clojure fixture: defn-typed functions, calls that fit their schemas (ok-calls) and eight
    planted bugs (bug-*), each a type error the checker finds through the schemas alone. The test
    checks this file form by form (defn-typed.typed-clojure/check-form!); it is never run."
-  (:require [defn-typed.core :refer [defn-typed defmeta]]))
+  (:require [defn-typed.core :refer [defn-typed defnt defmeta]]))
 
 (defmeta label-of
   {:doc "A person's label."})
@@ -146,3 +146,16 @@
 (defn-typed bumped-name {:name :string} -> :string
   (str (inc name))
 )
+
+(defmeta label-length
+  {:doc "A label's length, promised as a :string: defined with defnt, the short name."})
+
+;; bug-body-type through defnt: the body returns an integer where the signature promises :string
+(defnt label-length {:label :string} -> :string
+  (count label)
+)
+
+(defn bug-defnt-arg-type
+  "A literal call of a defnt function whose key holds the wrong type (:label wants :string)."
+  []
+  (label-length {:label 1}))

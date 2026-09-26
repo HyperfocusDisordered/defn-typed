@@ -45,12 +45,14 @@
    '[defn bug-wrong-typed-key]     ["input of label-of: Function label-of could not be applied to arguments:" :input]
    '[defn bug-misspelled-key]      ["input of label-of: Function label-of could not be applied to arguments:" :input]
    '[defn-typed name-length]       ["output of name-length: Type mismatch:" :output]
-   '[defn-typed bumped-name]       ["Function inc could not be applied to arguments:" nil]})
+   '[defn-typed bumped-name]       ["Function inc could not be applied to arguments:" nil]
+   '[defnt label-length]           ["output of label-length: Type mismatch:" :output]
+   '[defn bug-defnt-arg-type]      ["input of label-length: Function label-length could not be applied to arguments:" :input]})
 
 (deftest install-annotates-every-defn-typed-function
   ;; 2 defn-typed.core vars; per function its -props, plus --positional when the body is there
   ;; (countdown recurs to itself: its body stays in the var, which typed.malli's provider types)
-  (is (= (+ 2 (* 2 9) 1) @installed)))
+  (is (= (+ 2 (* 2 10) 1) @installed)))
 
 (deftest the-planted-bugs-are-reported
   (doseq [[form [message kind]] planted]

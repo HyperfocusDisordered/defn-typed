@@ -2,7 +2,7 @@
   "Runs the in/out cases written next to defn-typed.core's own functions. Below them: the pair format
    and what `defn-typed` and `defmeta` expand to, in cljs."
   (:require [cljs.test :refer [deftest is testing]]
-            [defn-typed.core :as core :refer [defn-typed defmeta]]
+            [defn-typed.core :as core :refer [defn-typed defnt defmeta]]
             [malli.core :as m]
             [malli.error :as me]
             [malli.instrument :as mi]))
@@ -65,6 +65,27 @@
     (is (= "a + b, b defaulting to 2." (:doc (meta #'padded))))
     (is (= {:doc "a + b, b defaulting to 2."} (:meta (get @core/registry `padded))))
     (is (= {:var `padded :cases 2 :failures []} (core/check-var #'padded)))))
+
+(defmeta shorter
+  {:doc "a + b under the short name, b defaulting to 2."
+   :inout-tests [[{:a 1}      3]
+                 [{:a 1 :b 5} 6]]})
+
+(defnt shorter {
+  :a :int
+  :b [:int {:default 2}]
+} -> :int
+  (+ a b)
+)
+
+(deftest defnt-is-defn-typed
+  (testing "a function defined with the :refer'red defnt is a defn-typed function: <name>-props, :malli/schema, the defmeta's :doc and cases, defaults"
+    (is (= [:map [:a :int] [:b {:optional true} [:int {:default 2}]]] shorter-props))
+    (is (= '[:=> [:cat shorter-props] :int] (:malli/schema (meta #'shorter))))
+    (is (= "a + b under the short name, b defaulting to 2." (:doc (meta #'shorter))))
+    (is (= {:var `shorter :cases 2 :failures []} (core/check-var #'shorter)))
+    (is (= 3 (shorter {:a 1})))
+    (is (= 6 (shorter {:a 1 :b 5})))))
 
 (defn-typed cart-total {
   :items [:sequential [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]]

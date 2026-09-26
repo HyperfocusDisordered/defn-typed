@@ -1,6 +1,6 @@
 (ns defn-typed.referred
   "defn-typed functions that refer-inline-test calls through `:refer`."
-  (:require [defn-typed.core :refer [defn-typed]]))
+  (:require [defn-typed.core :refer [defn-typed defnt]]))
 
 (defn-typed order-total {
   :price    [:int {:min 1}]
@@ -12,4 +12,8 @@
 
 (defn-typed greeting {:who :string :mark [:string {:default "!"}]} -> :string
   (str "hi " who mark)
+)
+
+(defnt tip {:amount [:int {:min 0}]} -> :int
+  (quot amount 10)
 )
