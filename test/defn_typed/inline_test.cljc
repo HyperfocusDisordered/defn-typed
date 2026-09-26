@@ -5,7 +5,9 @@
   (:require [clojure.test :refer [deftest is testing]]
             [defn-typed.core :refer [defn-typed]]
             ;; the value check of a literal runs when malli is loaded, as a dev/test loader loads it
-            #?(:clj [malli.core])))
+            #?@(:clj [[clojure.java.shell :as shell]
+                      [clojure.string :as str]
+                      [malli.core]])))
 
 (def inline?
   "Whether this build compiled with the switch on."
@@ -94,6 +96,13 @@
 
 (defn-typed scaled {:x :double} -> :any
   x
+)
+
+(defn-typed shipped {
+  :order   [:map [:price :int] [:qty [:int {:min 1 :default 1}]]]
+  :address [:maybe [:map {:closed true} [:city :string]]]
+} -> :any
+  [order address]
 )
 
 (defn- literal-caller [] (padded {:a 1}))
@@ -206,11 +215,11 @@
        (is (= ['.invoke `padded '{k 1}] (vec ((:inline (meta #'padded)) '{k 1})))))))
 
 #?(:clj
-   (defn- with-inline-property
-     "Calls f with the JVM property defn-typed.inline set to value (nil = unset), restored after."
-     [value f]
-     (let [before (System/getProperty "defn-typed.inline")
-           put! #(if % (System/setProperty "defn-typed.inline" %) (System/clearProperty "defn-typed.inline"))]
+   (defn- with-property
+     "Calls f with the JVM system property set to value (nil = unset), restored after."
+     [property value f]
+     (let [before (System/getProperty property)
+           put! #(if % (System/setProperty property %) (System/clearProperty property))]
        (put! value)
        (try (f) (finally (put! before))))))
 
@@ -220,9 +229,9 @@
        (is (= `padded--positional
               ;; *err*: the once-per-JVM instrumentation line, when malli.instrument is loaded
               (first (last (binding [*err* (java.io.StringWriter.)]
-                             (with-inline-property nil #((:inline (meta #'padded)) '{:a 1})))))))
+                             (with-property "defn-typed.inline" nil #((:inline (meta #'padded)) '{:a 1})))))))
        (is (= ['.invoke `padded '{:a 1}]
-              (vec (with-inline-property "false" #((:inline (meta #'padded)) '{:a 1}))))))))
+              (vec (with-property "defn-typed.inline" "false" #((:inline (meta #'padded)) '{:a 1}))))))))
 
 #?(:clj
    (deftest inline-under-instrumentation-warns-once
@@ -234,9 +243,9 @@
          (try
            (reset! warned false)
            (binding [*err* err]
-             (with-inline-property "false" #((:inline (meta #'padded)) '{:a 1}))
+             (with-property "defn-typed.inline" "false" #((:inline (meta #'padded)) '{:a 1}))
              (is (= "" (str err)))
-             (with-inline-property nil #(do ((:inline (meta #'padded)) '{:a 1})
+             (with-property "defn-typed.inline" nil #(do ((:inline (meta #'padded)) '{:a 1})
                                             ((:inline (meta #'padded)) '{:a 2}))))
            (is (= (str "defn-typed: literal calls compile to positional calls, instrumentation will not check them"
                        " — set -Ddefn-typed.inline=false in your dev/test alias\n")
@@ -303,3 +312,175 @@
          (is (= "" (compile-warnings '(order-total {:price 100 :qty 0}))))
          (is (re-find #"\(order-total …\) :price — missing required key\n$"
                       (compile-warnings '(order-total {:qty 0}))))))))
+
+#?(:clj
+   (defn- core-var
+     "defn-typed.core's var of that name, resolved at run time (nil where the library lacks it)."
+     [sym]
+     (resolve (symbol "defn-typed.core" (name sym)))))
+
+#?(:clj
+   (defn- with-project-settings
+     "Calls f with the project's defn-typed.edn read as the map m, the system properties unset."
+     [m f]
+     (if-let [v (core-var 'project-settings)]
+       (with-redefs-fn {v (delay ((core-var 'settings-of-file) (let [file (java.io.File/createTempFile "defn-typed" ".edn")]
+                                                                  (spit file (pr-str m))
+                                                                  file)))}
+         #(with-property "defn-typed.literal-check" nil
+            (fn [] (with-property "defn-typed.inline" nil f))))
+       (is false "defn-typed.core has no project settings"))))
+
+#?(:clj
+   (defn- compile-error
+     "The message of the defn-typed error that compiling form throws (compiled inside a fn that is
+      never called), nil when it compiles; stderr is dropped."
+     [form]
+     (binding [*err* (java.io.StringWriter.) *ns* (the-ns 'defn-typed.inline-test)]
+       (try (eval (list 'fn [] form)) nil
+            (catch Throwable e
+              (some #(when (re-find #"^defn-typed[ :]" (str (ex-message %))) (ex-message %))
+                    (take-while some? (iterate ex-cause e))))))))
+
+#?(:clj
+   (defn- settings-tree
+     "A temp directory with the files {relative path content}; returns its java.io.File."
+     [files]
+     (let [root (.toFile (java.nio.file.Files/createTempDirectory "defn-typed-settings" (make-array java.nio.file.attribute.FileAttribute 0)))]
+       (doseq [[path content] files]
+         (let [f (java.io.File. root ^String path)]
+           (.mkdirs (.getParentFile f))
+           (spit f content)))
+       root)))
+
+#?(:clj
+   (deftest settings-file-lookup
+     (testing "defn-typed.edn is looked up from the working dir up through its parents: a parent's file is found, a nearer one wins, none = nil"
+       (if-let [settings-file (core-var 'settings-file)]
+         (let [root (settings-tree {"defn-typed.edn" "{:literal-check :error}"
+                                    "backend/src/.keep" ""
+                                    "miniapp/defn-typed.edn" "{:inline false}"})
+               empty-root (settings-tree {"a/b/.keep" ""})]
+           (is (= (java.io.File. root "defn-typed.edn") (settings-file (java.io.File. root "backend/src"))))
+           (is (= (java.io.File. root "defn-typed.edn") (settings-file root)))
+           (is (= (java.io.File. root "miniapp/defn-typed.edn") (settings-file (java.io.File. root "miniapp"))))
+           (is (nil? (settings-file (java.io.File. empty-root "a/b")))))
+         (is false "defn-typed.core has no settings-file")))))
+
+#?(:clj
+   (deftest settings-of-a-file
+     (testing "no file = the defaults; a file's keys override them; a bad key, value or shape throws naming the file, the key and the allowed values"
+       (if-let [settings-of-file (core-var 'settings-of-file)]
+         (let [file (fn [content] (let [root (settings-tree {"defn-typed.edn" content})] (java.io.File. root "defn-typed.edn")))
+               error (fn [content] (try (settings-of-file (file content)) nil
+                                        (catch clojure.lang.ExceptionInfo e (ex-message e))))]
+           (is (= {:literal-check :warn :inline true} (settings-of-file nil)))
+           (is (= {:literal-check :warn :inline true} (settings-of-file (file "{}"))))
+           (is (= {:literal-check :error :inline true} (settings-of-file (file "{:literal-check :error}"))))
+           (is (= {:literal-check :warn :inline false} (settings-of-file (file "{:literal-check :warn :inline false}"))))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :inline$"
+                        (error "{:strict true}")))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: :literal-check must be one of :warn, :error, got :fail$"
+                        (error "{:literal-check :fail}")))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: :inline must be one of true, false, got \"no\"$"
+                        (error "{:inline \"no\"}")))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: the settings must be a map, got \[:error\]$"
+                        (error "[:error]"))))
+         (is false "defn-typed.core has no settings-of-file")))))
+
+#?(:clj
+   (deftest literal-check-setting
+     (testing "no setting: a failing literal prints its warning and compiles to the map call"
+       (with-project-settings {}
+         #(do (is (nil? (compile-error '(order-total {:price 100 :qty 0}))))
+              (is (re-find #"^WARNING defn-typed .*: \(order-total …\) :qty 0 — should be at least 1\n$"
+                           (compile-warnings '(order-total {:price 100 :qty 0})))))))
+     (testing "{:literal-check :error}: a failing literal is a compile error with the warning's text; a fitting one compiles"
+       (with-project-settings {:literal-check :error}
+         #(do (is (re-find #"^defn-typed .*: \(order-total …\) :qty 0 — should be at least 1$"
+                           (str (compile-error '(order-total {:price 100 :qty 0})))))
+              (is (re-find #"^defn-typed .*: \(closed-pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9$"
+                           (str (compile-error '(closed-pair {:zz 1 :b 10})))))
+              (is (nil? (compile-error '(order-total {:price 100 :qty 2}))))
+              (is (nil? (compile-error '(let [m {:qty 0}] (order-total m)))))
+              (testing "a cljs call site is judged by the same setting"
+                (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^defn-typed f:1: \(order-total …\) :price — missing required key$"
+                                      (defn-typed.core/expand-call {:spec {:name `order-total :props `order-total-props
+                                                                           :rows [{:key :price :index 1 :type [:int {:min 1}] :required true}]}
+                                                                    :arg {} :fallback :map-call :cljs? true
+                                                                    :file "f" :line 1})))))))
+     (testing "the system property wins over the file: `warn` over :error, `error` over :warn; a bad value throws naming the allowed ones"
+       (with-project-settings {:literal-check :error}
+         #(with-property "defn-typed.literal-check" "warn"
+            (fn [] (is (nil? (compile-error '(order-total {:price 100 :qty 0})))))))
+       (with-project-settings {:literal-check :warn}
+         #(with-property "defn-typed.literal-check" "error"
+            (fn [] (is (re-find #"\(order-total …\) :qty 0 — should be at least 1$"
+                                (str (compile-error '(order-total {:price 100 :qty 0}))))))))
+       (with-project-settings {}
+         #(with-property "defn-typed.literal-check" "strict"
+            (fn [] (is (= "defn-typed: the system property defn-typed.literal-check must be one of warn, error, got \"strict\""
+                          (compile-error '(order-total {:price 100 :qty 2}))))))))))
+
+#?(:clj
+   (deftest inline-setting
+     (testing "{:inline false} keeps the map call; the property `defn-typed.inline` wins over the file"
+       (let [expand #((:inline (meta #'padded)) '{:a 1})]
+         (with-project-settings {:inline false}
+           #(do (is (= ['.invoke `padded '{:a 1}] (vec (expand))))
+                (is (= `padded--positional
+                       (first (last (binding [*err* (java.io.StringWriter.)]
+                                      (with-property "defn-typed.inline" "true" expand))))))))
+         (with-project-settings {:inline true}
+           #(is (= ['.invoke `padded '{:a 1}] (vec (with-property "defn-typed.inline" "false" expand)))))))))
+
+#?(:clj
+   (deftest settings-read-from-the-working-dir
+     (testing "a JVM compiling in a subdirectory of a project with defn-typed.edn {:literal-check :error} fails on a failing literal and loads a fitting one"
+       (let [root (settings-tree {"defn-typed.edn" "{:literal-check :error}" "backend/.keep" ""})
+             classpath (->> (str/split (System/getProperty "java.class.path") (re-pattern java.io.File/pathSeparator))
+                            (map #(.getAbsolutePath (java.io.File. ^String %)))
+                            (str/join java.io.File/pathSeparator))
+             run (fn [call]
+                   (shell/sh "java" "-cp" classpath "clojure.main" "-e"
+                             (str "(require 'defn-typed.core) (do (defn-typed.core/defn-typed f {:a :int} -> :any a) nil) " call)
+                             :dir (java.io.File. root "backend")))
+             failing (run "(f {:b 1})")
+             fitting (run "(println (f {:a 1}))")]
+         (is (= 1 (:exit failing)))
+         (is (re-find #"defn-typed NO_SOURCE_PATH:1: \(f …\) :a — missing required key" (:err failing)))
+         (is (= [0 "1\n"] [(:exit fitting) (:out fitting)]))))))
+
+#?(:clj
+   (deftest nested-literal-checks
+     (testing "a map literal inside a map literal is judged by its own [:map …] row, the finding led by the full key path"
+       (is (re-find #"^WARNING defn-typed .*: \(shipped …\) :order :price \"x\" — should be an integer\n$"
+                    (compile-warnings '(shipped {:order {:price "x"} :address {:city "Hanoi"}}))))
+       (is (re-find #"\(shipped …\) :order :price — missing required key\n$"
+                    (compile-warnings '(shipped {:order {:qty 2} :address nil}))))
+       (is (re-find #"\(shipped …\) :address :zip — unknown key\n$"
+                    (compile-warnings '(shipped {:order {:price 1} :address {:city "Hanoi" :zip 1}}))))
+       (is (re-find #"\(shipped …\) :order :qty 0 — should be at least 1\n$"
+                    (compile-warnings '(shipped {:order {:price 1 :qty 0} :address nil})))))
+     (testing "a nested value that is not data is skipped; its literal siblings are still judged"
+       (is (= "" (compile-warnings '(let [p "x"] (shipped {:order {:price p} :address nil})))))
+       (is (= "" (compile-warnings '(let [a {:zip 1}] (shipped {:order {:price 1} :address a})))))
+       (is (re-find #"\(shipped …\) :order :qty 0 — should be at least 1\n$"
+                    (compile-warnings '(let [p "x"] (shipped {:order {:price p :qty 0} :address nil}))))))
+     (testing "malli not loaded: the nested key checks run, the nested value check does not"
+       (with-redefs [find-ns (fn [sym] (when-not (= 'malli.core sym) (clojure.lang.Namespace/find sym)))]
+         (is (= "" (compile-warnings '(shipped {:order {:price "x"} :address nil}))))
+         (is (re-find #"\(shipped …\) :order :price — missing required key; :address :zip — unknown key\n$"
+                      (compile-warnings '(shipped {:order {} :address {:city "H" :zip 1}}))))))
+     (testing "a cljs call site walks the nested rows as written"
+       (let [spec {:name `shipped :props `shipped-props
+                   :rows [{:key :order :index 1 :type [:map [:price :int]] :required true}]}
+             err (java.io.StringWriter.)]
+         (binding [*err* err]
+           (defn-typed.core/expand-call {:spec spec :arg {:order {:price "x"}} :fallback :map-call :cljs? true
+                                         :file "f" :line 1}))
+         (is (re-find #"\(shipped …\) :order :price \"x\" — should be an integer\n$" (str err)))))
+     (testing "{:literal-check :error}: a nested finding is a compile error"
+       (with-project-settings {:literal-check :error}
+         #(is (re-find #"\(shipped …\) :address :zip — unknown key$"
+                       (str (compile-error '(shipped {:order {:price 1} :address {:city "H" :zip 1}})))))))))
