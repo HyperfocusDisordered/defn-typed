@@ -12,12 +12,13 @@
 
 (deftest readme-examples-compile-and-pass
   (let [blocks (readme-examples)]
-    (is (= 3 (count blocks)))
+    (is (= 4 (count blocks)))
     (binding [*ns* *ns*]
       (load-string (apply str blocks))))
   (testing "their defmeta cases run against their defn-typed fns"
     (is (= [{:var 'example/fizzbuzz :cases 5 :failures []}
             {:var 'example/invite-token-of :cases 5 :failures []}
+            {:var 'example/line-total :cases 2 :failures []}
             {:var 'example/order-total :cases 3 :failures []}]
            (core/check-ns 'example))))
   (testing "a call reads the rows as locals"

@@ -236,33 +236,14 @@ Timing: about 17 ms per form on a warm JVM (an application namespace); the fixtu
 large namespace, a whole-file `check-ns` may exhaust the checker's stack, and a checker thread that
 runs away cannot be stopped, only abandoned (restart the JVM).
 
-## Example
+## Examples
 
-Read top to bottom: the task, then its inputs and outputs, then the typed function.
+### Micro — `fizzbuzz`
 
 <!-- readme-test -->
 ```clojure
 (ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
 
-(defmeta order-total
-  {:doc "Order total: price × qty, minus a percent discount."
-   :inout-tests [[{:price 100}                      100]
-                 [{:price 100 :qty 3}               300]
-                 [{:price 100 :qty 3 :discount 10}  270]]})
-
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-  (quot (* price qty (- 100 discount)) 100)
-)
-```
-
-The smallest one, a single input:
-
-<!-- readme-test -->
-```clojure
 (defmeta fizzbuzz
   {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
    :inout-tests [[{:n 1}  "1"]
@@ -277,7 +258,74 @@ The smallest one, a single input:
         (zero? (mod n 5))  "Buzz"
         :else              (str n))
 )
+
+(fizzbuzz {:n 15}) ;=> "FizzBuzz"
 ```
+
+Under this form:
+
+- As you type, clj-kondo rejects a string input: `should be an integer`.
+- With instrumentation, the same call throws: `should be an integer`.
+- In a release build, the literal call becomes `(fizzbuzz--positional 15)`; see [Zero-cost calls](#zero-cost-calls).
+- Typed Clojure rejects a numeric body for `-> :string`: `Type mismatch:`.
+
+### Defaults, ranges, docs, example tests — `order-total`
+
+<!-- readme-test -->
+```clojure
+(defmeta order-total
+  {:doc "Order total: price × qty, minus a percent discount."
+   :inout-tests [[{:price 100}                      100]
+                 [{:price 100 :qty 3}               300]
+                 [{:price 100 :qty 3 :discount 10}  270]]})
+
+(defn-typed order-total {
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+  (quot (* price qty (- 100 discount)) 100)
+)
+
+(order-total {:price 100}) ;=> 100
+(order-total {:price 100 :qty 3 :discount 10}) ;=> 270
+```
+
+Under this form:
+
+- Defaults fill at compile time: `:qty 1` and `:discount 0`.
+- A literal out-of-range call warns during the build: `:discount 150 — should be at most 100`.
+- The `[in out]` pairs run as tests: `{:cases 3, :failures []}`.
+- `(doc order-total)` shows `([{:keys [price qty discount]}])` and `Order total: price × qty, minus a percent discount.`.
+
+### Nested map — `line-total`
+
+<!-- readme-test -->
+```clojure
+(defmeta line-total
+  {:doc "Line total after the discount."
+   :inout-tests [[{:item {:price 100}} 100]
+                 [{:item {:price 100 :qty 2} :discount 50} 100]]})
+
+(defn-typed line-total {
+  :item     [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+  (quot (* (:price item) (:qty item) (- 100 discount)) 100)
+)
+
+(line-total {:item {:price 100}}) ;=> 100
+(line-total {:item {:price 100 :qty 2} :discount 50}) ;=> 100
+```
+
+Under this form:
+
+- The nested `:qty` default fills to `1`.
+- A literal wrong nested value warns with its key path: `:item :price "x" — should be an integer`.
+- clj-kondo flags the nested wrong type: `should be an integer`.
+- Nested values stay maps; only the outer map is argument syntax.
+
+### A real one — `invite-token-of`
 
 A real one, from the app this library was extracted from:
 
@@ -301,7 +349,7 @@ A real one, from the app this library was extracted from:
 )
 ```
 
-The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
+The four blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
 
 ## Syntax
 
