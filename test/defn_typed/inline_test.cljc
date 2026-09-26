@@ -123,8 +123,9 @@
     (is (= {:d "x"} (nested {:n {}})))
     (is (= {:d "y"} (nested {:n {:d "y"}})))
     (is (nil? (nested {}))))
-  (testing "^{:as row} binds the whole filled map, keys beyond the rows included"
-    (is (= [1 2 {:a 1 :b 2 :z 9}] (whole {:a 1 :z 9}))))
+  (testing "^{:as row} binds the whole filled map, a real map's keys beyond the rows included (a literal call flags them)"
+    (let [m {:a 1 :z 9}]
+      (is (= [1 2 {:a 1 :b 2 :z 9}] (whole m)))))
   (testing "a row typed by a symbol reads its default from the evaluated schema"
     (is (= 7 (via-symbol {})))
     (is (= 8 (via-symbol {:k 8}))))
@@ -452,7 +453,7 @@
              failing (run "(f {:b 1})")
              fitting (run "(println (f {:a 1}))")]
          (is (= 1 (:exit failing)))
-         (is (re-find #"defn-typed NO_SOURCE_PATH:1: \(f …\) :a — missing required key" (:err failing)))
+         (is (re-find #"defn-typed NO_SOURCE_PATH:1: \(f …\) :b — unknown key; :a — missing required key" (:err failing)))
          (is (= [0 "1\n"] [(:exit fitting) (:out fitting)]))))))
 
 #?(:clj

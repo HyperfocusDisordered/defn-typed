@@ -538,7 +538,6 @@
        (cond
          (and nested (map? value))
          (map-literal-mismatches {:path path :m value :malli malli :cljs? cljs?
-                                  :closed (true? (:closed (schema-props nested)))
                                   :rows (for [entry (rest nested) :when (vector? entry)
                                               :let [[k entry-props type] (row-parts entry)]]
                                           {:key k :required (not (:optional entry-props)) :schema type :source type})})
@@ -555,16 +554,16 @@
 #?(:clj
    (defn- map-literal-mismatches
      "Why the map literal m at path does not fit rows (`{:key :required :schema :source}`), one
-      text per finding led by the key's path (`:order :price`): an unknown key (closed only:
-      `[:map …]` is open), a missing required key (not judged when a key is not a keyword literal:
-      `{k 1}` may hold any key), then each value's own (value-mismatches)."
-     [{:keys [path m rows closed malli cljs?]}]
+      text per finding led by the key's path (`:order :price`): an unknown key (a literal is
+      compiler syntax: a key beyond the rows is a mistake, the table open or closed), a missing
+      required key (not judged when a key is not a keyword literal: `{k 1}` may hold any key), then
+      each value's own (value-mismatches)."
+     [{:keys [path m rows malli cljs?]}]
      (let [row-of (into {} (map (juxt :key identity)) rows)
            at #(path-text (conj path %))]
        (concat
-        (when closed
-          (for [k (keys m) :when (and (keyword? k) (not (contains? row-of k)))]
-            (str (at k) " — unknown key")))
+        (for [k (keys m) :when (and (keyword? k) (not (contains? row-of k)))]
+          (str (at k) " — unknown key"))
         (when (every? keyword? (keys m))
           (for [{:keys [key required]} rows :when (and required (not (contains? m key)))]
             (str (at key) " — missing required key")))
@@ -581,7 +580,7 @@
       whose schema cannot be evaluated here (clj: the evaluated props; cljs: the source form when
       it is data) skips its value."
      [{:keys [spec arg schema-of malli cljs?]}]
-     (map-literal-mismatches {:path [] :m arg :closed (:closed spec) :malli malli :cljs? cljs?
+     (map-literal-mismatches {:path [] :m arg :malli malli :cljs? cljs?
                               :rows (for [row (:rows spec)]
                                       {:key (:key row) :required (:required row) :source (:type row)
                                        :schema (try (schema-of row) (catch Exception _ nil))})})))
@@ -625,7 +624,7 @@
                    (binding [*out* *err*]
                      (println (str "WARNING " text))))))
              (if (and inline? (not mismatches) (:positional spec)
-                      ;; a key beyond the rows (open map) or not a keyword literal: the map call
+                      ;; a key that is not a keyword literal (unjudged, may be any key): the map call
                       (every? (set (map :key (:rows spec))) (keys arg)))
                (do (when-not cljs? (warn-if-instrumented!))
                    (literal-call spec arg))
@@ -768,7 +767,7 @@
               ;; so :doc is the var's docstring in clj and cljs alike
               meta-keys (dissoc (get @pending-meta q) :inout-tests)
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
-              spec (cond-> {:name q :props q-props :closed (true? (:closed (schema-props in-schema)))
+              spec (cond-> {:name q :props q-props
                             :rows (mapv #(select-keys % [:key :index :type :absent :required]) rows)}
                      ;; a :malli-in-prod call must pass the check in name: never the positional call
                      (and positional? (not whole) (not-any? :runtime rows) (not malli-opts))
