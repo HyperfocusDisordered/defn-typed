@@ -114,11 +114,32 @@
   [ns-sym form]
   (and (seq? form) (= #'defn-typed (try (ns-resolve ns-sym (first form)) (catch Exception _ nil)))))
 
+(defn- labelled
+  "{:message :kind} of the checker's message for an error in form of ns-sym: a call of a defn-typed
+   function it could not apply (`Function <f> could not be applied…`, f resolving in ns-sym to a
+   defn-typed function) = `input of <f>: ` before the message, :input; a `Type mismatch:` in a
+   `(defn-typed <f> …)` form = `output of <f>: `, :output; anything else = the message, nil."
+  [ns-sym form message]
+  (let [[_ applied] (re-find #"^Function (\S+) could not be applied" message)
+        applied-var (when applied (try (ns-resolve ns-sym (symbol applied)) (catch Exception _ nil)))]
+    (cond
+      (and (var? applied-var) (defn-typed-fn applied-var))
+      {:message (str "input of " applied ": " message) :kind :input}
+
+      (and (str/starts-with? message "Type mismatch:") (defn-typed-form? ns-sym form))
+      {:message (str "output of " (second form) ": " message) :kind :output}
+
+      ;; an error that is neither: the checker's text as it is
+      :else {:message message :kind nil})))
+
 (defmeta check-form!
   {:doc "Type-checks one top-level `form` of the namespace `ns` (loaded, `install!`ed) without
          evaluating it (`:check-form-eval :never`: the default re-evaluates the form, which drops
          malli's instrumentation of what it redefines). `file` = the source path the errors name.
-         Returns every type error: `{:file :line :column :message :defn-typed?}`, `:defn-typed?`
+         Returns every type error: `{:file :line :column :message :kind :defn-typed?}`: `:message`
+         = the checker's text, led by `input of <f>: ` when it could not apply the defn-typed
+         function f to the call's map (`:kind :input`) or by `output of <f>: ` for a type mismatch
+         in the defn-typed definition of f (`:kind :output`), `:kind` nil otherwise; `:defn-typed?`
          true when the error is inside a `(defn-typed …)` form (its body) or its form calls a
          defn-typed function. A checker crash (StackOverflowError on a very large form) is one
          error of its message."})
@@ -129,7 +150,7 @@
   :form :any
   :file [{:optional true} :string]
 } -> [:vector [:map [:file [:maybe :string]] [:line [:maybe :int]] [:column [:maybe :int]]
-                    [:message :string] [:defn-typed? :boolean]]]
+                    [:message :string] [:kind [:maybe [:enum :input :output]]] [:defn-typed? :boolean]]]
   (let [out (java.io.StringWriter.)
         result (binding [*ns* (the-ns ns)
                          *file* (or file *file*)
@@ -143,11 +164,11 @@
         in-defn-typed? (defn-typed-form? ns form)]
     (mapv (fn [e]
             (let [{:keys [env] error-form :form} (ex-data e)]
-              {:file (:file env)
-               :line (:line env)
-               :column (:column env)
-               :message (str/trim (or (ex-message e) (str (class e))))
-               :defn-typed? (boolean (or in-defn-typed?
-                                         (some #(defn-typed-var? ns %) (tree-seq coll? seq error-form))))}))
+              (merge {:file (:file env)
+                      :line (:line env)
+                      :column (:column env)}
+                     (labelled ns form (str/trim (or (ex-message e) (str (class e)))))
+                     {:defn-typed? (boolean (or in-defn-typed?
+                                                (some #(defn-typed-var? ns %) (tree-seq coll? seq error-form))))})))
           errors))
 )
