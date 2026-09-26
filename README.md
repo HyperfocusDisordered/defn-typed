@@ -256,6 +256,66 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 clj-kondo reports wrong calls of `defn-typed` functions once malli has written the functions'
 types into the project's `.clj-kondo` directory. In the consuming project:
 
+### Typed Clojure
+
+[Typed Clojure](https://github.com/typedclojure/typedclojure) type-checks the code with the types
+the signatures already declare: no annotation per function. It follows a value where clj-kondo
+stops (a map built apart from the call) and checks the body against `->`.
+
+The library does not depend on Typed Clojure. Add it to your dev alias:
+
+```clojure
+:aliases {:dev {:extra-deps {org.typedclojure/typed.clj.checker {:mvn/version "1.3.0"}
+                             org.typedclojure/typed.malli {:mvn/version "1.3.0"}}}}
+```
+
+```clojure
+(require '[defn-typed.typed-clojure :refer [install! check-form!]])
+
+(install! {:namespaces ['my.app.core]})      ; again after reloading a namespace
+
+(check-form! {:ns 'my.app.core :form form :file "src/my/app/core.clj"})
+;; => [{:file "src/my/app/core.clj" :line 12 :column 3 :defn-typed? true
+;;      :message "Function inc could not be applied to arguments: …"}]
+```
+
+- `install!` collects the namespaces' malli function schemas, from which typed.malli's var-type
+  provider (registered by the `typedclojure_config.cljc` in its jar) types each function, and
+  evaluates `t/ann` for each function's `<name>--positional` (where the body lives) and
+  `<name>-props`, and for the `defn-typed.core` functions an expansion calls.
+- `check-form!` checks one top-level form (read from the file with its `:line`) and returns every
+  type error as data. `:defn-typed?` is true when the error is inside a `(defn-typed …)` form or
+  its form calls a defn-typed function: a per-edit hook reports those first, while the rest of the
+  code has no annotations yet.
+- It checks with `:check-form-eval :never`. Typed Clojure's default, `:after`, evaluates every
+  checked form again, which redefines the var without malli's instrumentation.
+- Every form the macro generates without your code in it carries `^:typed.clojure/ignore`, so
+  the checker sees your body and your calls, not the expansion.
+
+What it finds, on the seven planted bugs of
+[test-typed/defn_typed/typed_bugs.clj](test-typed/defn_typed/typed_bugs.clj):
+
+| Bug | Example | Typed Clojure | clj-kondo |
+|---|---|---|---|
+| wrong type into a row through a local | `(let [id (label-of {:name "9"})] (cover-of {:lot_id id …}))` | yes | yes |
+| a `:string` result used as a number | `(inc (label-of {:name "a"}))` | yes | yes |
+| wrong type in a nested map literal | `(zip-of {:address {:zip "10115" :city "Berlin"}})` | yes | yes |
+| a field of another function's result into a row | `(cover-of {:lot_id (:title m) …})`, `m` = `(summary-of {:id 9})` | yes | yes |
+| a field of a result used as a number | `(inc (:title (summary-of {:id 9})))` | yes | yes |
+| a nested map built apart from the call | `(let [addr {:zip (label-of …) :city "Berlin"}] (zip-of {:address addr}))` | yes | no |
+| the body returns another type than `->` | `(defn-typed lot-count {:label :string} -> :int (str label))` | yes | no |
+| | | **7 / 7** | **5 / 7** |
+
+clj-kondo here = the exported hooks plus the malli types of step 2 above; with the hooks alone it
+finds 2 of 7 (the two results used as numbers).
+
+Timing: about 17 ms per form on a warm JVM (an application namespace); the fixture's 21 forms take
+121 ms together (median 5 ms, slowest 23 ms). Check form by form, each with a deadline: over a very
+large namespace, a whole-file `check-ns` may exhaust the checker's stack, and a checker thread that
+runs away cannot be stopped, only abandoned (restart the JVM).
+
+### clj-kondo
+
 ```sh
 # 1. the defn-typed hooks (once, and again after upgrading the library)
 mkdir -p .clj-kondo   # clj-kondo copies configs only into an existing config dir
@@ -327,64 +387,6 @@ What is checked where:
   only in dev/test.
 
 Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent this check after every edit.
-
-## Typed Clojure
-
-[Typed Clojure](https://github.com/typedclojure/typedclojure) type-checks the code with the types
-the signatures already declare: no annotation per function. It follows a value where clj-kondo
-stops (a map built apart from the call) and checks the body against `->`.
-
-The library does not depend on Typed Clojure. Add it to your dev alias:
-
-```clojure
-:aliases {:dev {:extra-deps {org.typedclojure/typed.clj.checker {:mvn/version "1.3.0"}
-                             org.typedclojure/typed.malli {:mvn/version "1.3.0"}}}}
-```
-
-```clojure
-(require '[defn-typed.typed-clojure :refer [install! check-form!]])
-
-(install! {:namespaces ['my.app.core]})      ; again after reloading a namespace
-
-(check-form! {:ns 'my.app.core :form form :file "src/my/app/core.clj"})
-;; => [{:file "src/my/app/core.clj" :line 12 :column 3 :defn-typed? true
-;;      :message "Function inc could not be applied to arguments: …"}]
-```
-
-- `install!` collects the namespaces' malli function schemas, from which typed.malli's var-type
-  provider (registered by the `typedclojure_config.cljc` in its jar) types each function, and
-  evaluates `t/ann` for each function's `<name>--positional` (where the body lives) and
-  `<name>-props`, and for the `defn-typed.core` functions an expansion calls.
-- `check-form!` checks one top-level form (read from the file with its `:line`) and returns every
-  type error as data. `:defn-typed?` is true when the error is inside a `(defn-typed …)` form or
-  its form calls a defn-typed function: a per-edit hook reports those first, while the rest of the
-  code has no annotations yet.
-- It checks with `:check-form-eval :never`. Typed Clojure's default, `:after`, evaluates every
-  checked form again, which redefines the var without malli's instrumentation.
-- Every form the macro generates without your code in it carries `^:typed.clojure/ignore`, so
-  the checker sees your body and your calls, not the expansion.
-
-What it finds, on the seven planted bugs of
-[test-typed/defn_typed/typed_bugs.clj](test-typed/defn_typed/typed_bugs.clj):
-
-| Bug | Example | Typed Clojure | clj-kondo |
-|---|---|---|---|
-| wrong type into a row through a local | `(let [id (label-of {:name "9"})] (cover-of {:lot_id id …}))` | yes | yes |
-| a `:string` result used as a number | `(inc (label-of {:name "a"}))` | yes | yes |
-| wrong type in a nested map literal | `(zip-of {:address {:zip "10115" :city "Berlin"}})` | yes | yes |
-| a field of another function's result into a row | `(cover-of {:lot_id (:title m) …})`, `m` = `(summary-of {:id 9})` | yes | yes |
-| a field of a result used as a number | `(inc (:title (summary-of {:id 9})))` | yes | yes |
-| a nested map built apart from the call | `(let [addr {:zip (label-of …) :city "Berlin"}] (zip-of {:address addr}))` | yes | no |
-| the body returns another type than `->` | `(defn-typed lot-count {:label :string} -> :int (str label))` | yes | no |
-| | | **7 / 7** | **5 / 7** |
-
-clj-kondo here = the exported hooks plus the malli types of step 2 above; with the hooks alone it
-finds 2 of 7 (the two results used as numbers).
-
-Timing: about 17 ms per form on a warm JVM (an application namespace); the fixture's 21 forms take
-121 ms together (median 5 ms, slowest 23 ms). Check form by form, each with a deadline: over a very
-large namespace, a whole-file `check-ns` may exhaust the checker's stack, and a checker thread that
-runs away cannot be stopped, only abandoned (restart the JVM).
 
 ## Syntax
 
