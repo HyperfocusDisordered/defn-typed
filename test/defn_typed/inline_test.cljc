@@ -123,8 +123,9 @@
     (is (= {:d "x"} (nested {:n {}})))
     (is (= {:d "y"} (nested {:n {:d "y"}})))
     (is (nil? (nested {}))))
-  (testing "^{:as row} binds the whole filled map, keys beyond the rows included"
-    (is (= [1 2 {:a 1 :b 2 :z 9}] (whole {:a 1 :z 9}))))
+  (testing "^{:as row} binds the whole filled map, a real map's keys beyond the rows included (a literal call flags them)"
+    (let [m {:a 1 :z 9}]
+      (is (= [1 2 {:a 1 :b 2 :z 9}] (whole m)))))
   (testing "a row typed by a symbol reads its default from the evaluated schema"
     (is (= 7 (via-symbol {})))
     (is (= 8 (via-symbol {:k 8}))))
@@ -289,11 +290,13 @@
                     (compile-warnings '(order-total {:price "100"}))))
        (is (re-find #"\(closed-pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9\n$"
                     (compile-warnings '(closed-pair {:zz 1 :b 10}))))
-       (is (re-find #"\(order-total …\) :price — missing required key; :discount 101 — should be at most 100\n$"
+       (is (re-find #"\(order-total …\) :zz — unknown key; :price — missing required key; :discount 101 — should be at most 100\n$"
                     (compile-warnings '(order-total {:zz 1 :discount 101})))))
-     (testing "an open input map takes keys beyond the rows; a key that is not a keyword literal may be any key"
-       (is (= "" (compile-warnings '(order-total {:price 100 :zz 1}))))
-       (is (= "" (compile-warnings '(whole {:a 1 :z 3}))))
+     (testing "a key beyond the rows is an unknown key, the input map open or closed; a key that is not a keyword literal may be any key"
+       (is (re-find #"^WARNING defn-typed .*: \(order-total …\) :discont — unknown key\n$"
+                    (compile-warnings '(order-total {:price 100 :discont 10}))))
+       (is (re-find #"\(whole …\) :z — unknown key\n$"
+                    (compile-warnings '(whole {:a 1 :z 3}))))
        (is (= "" (compile-warnings '(let [k :price] (order-total {k 100})))))
        (is (= "" (compile-warnings '(via-symbol {})))))
      (testing "a reason is `<key> <value> — <text>`: a part inside the value leads with its path; a part malli has no message for reads `does not match <schema as written>`"
@@ -401,6 +404,8 @@
                            (str (compile-error '(order-total {:price 100 :qty 0})))))
               (is (re-find #"^defn-typed .*: \(closed-pair …\) :zz — unknown key; :a — missing required key; :b 10 — should be at most 9$"
                            (str (compile-error '(closed-pair {:zz 1 :b 10})))))
+              (is (re-find #"^defn-typed .*: \(order-total …\) :discont — unknown key$"
+                           (str (compile-error '(order-total {:price 100 :discont 10})))))
               (is (nil? (compile-error '(order-total {:price 100 :qty 2}))))
               (is (nil? (compile-error '(let [m {:qty 0}] (order-total m)))))
               (testing "a cljs call site is judged by the same setting"
@@ -448,7 +453,7 @@
              failing (run "(f {:b 1})")
              fitting (run "(println (f {:a 1}))")]
          (is (= 1 (:exit failing)))
-         (is (re-find #"defn-typed NO_SOURCE_PATH:1: \(f …\) :a — missing required key" (:err failing)))
+         (is (re-find #"defn-typed NO_SOURCE_PATH:1: \(f …\) :b — unknown key; :a — missing required key" (:err failing)))
          (is (= [0 "1\n"] [(:exit fitting) (:out fitting)]))))))
 
 #?(:clj
@@ -460,6 +465,8 @@
                     (compile-warnings '(shipped {:order {:qty 2} :address nil}))))
        (is (re-find #"\(shipped …\) :address :zip — unknown key\n$"
                     (compile-warnings '(shipped {:order {:price 1} :address {:city "Hanoi" :zip 1}}))))
+       (is (re-find #"\(shipped …\) :order :sku — unknown key\n$"
+                    (compile-warnings '(shipped {:order {:price 1 :sku "x"} :address nil}))))
        (is (re-find #"\(shipped …\) :order :qty 0 — should be at least 1\n$"
                     (compile-warnings '(shipped {:order {:price 1 :qty 0} :address nil})))))
      (testing "a nested value that is not data is skipped; its literal siblings are still judged"
@@ -482,5 +489,7 @@
          (is (re-find #"\(shipped …\) :order :price \"x\" — should be an integer\n$" (str err)))))
      (testing "{:literal-check :error}: a nested finding is a compile error"
        (with-project-settings {:literal-check :error}
-         #(is (re-find #"\(shipped …\) :address :zip — unknown key$"
-                       (str (compile-error '(shipped {:order {:price 1} :address {:city "H" :zip 1}})))))))))
+         #(do (is (re-find #"\(shipped …\) :address :zip — unknown key$"
+                           (str (compile-error '(shipped {:order {:price 1} :address {:city "H" :zip 1}})))))
+              (is (re-find #"\(shipped …\) :order :sku — unknown key$"
+                           (str (compile-error '(shipped {:order {:price 1 :sku "x"} :address nil}))))))))))
