@@ -3,7 +3,8 @@
    fixture's defn-typed functions from their schemas alone, then check-form! checks the fixture
    file form by form — the seven planted bugs are reported and involve a defn-typed function,
    every other form (the defn-typed forms included) is clean."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [defn-typed.typed-bugs]
             [defn-typed.typed-clojure :refer [install! check-form!]]))
@@ -14,7 +15,7 @@
   "The fixture's top-level forms after its ns form, read in its namespace with their :line."
   []
   (binding [*ns* (the-ns 'defn-typed.typed-bugs)]
-    (with-open [r (clojure.lang.LineNumberingPushbackReader. (clojure.java.io/reader fixture))]
+    (with-open [r (clojure.lang.LineNumberingPushbackReader. (io/reader fixture))]
       (vec (rest (take-while #(not= ::eof %) (repeatedly #(read {:eof ::eof} r))))))))
 
 (def installed
