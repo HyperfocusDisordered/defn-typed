@@ -3,7 +3,7 @@
    the map call (the switch off: clj `-J-Ddefn-typed.inline=false`, cljs dev) or to the positional
    call (on: clj by default, cljs `:advanced`). CI runs this namespace both ways."
   (:require [clojure.test :refer [deftest is testing]]
-            [defn-typed.core :refer [defn-typed]]
+            [defn-typed.core :refer [defn-typed defmeta]]
             ;; the value check of a literal runs when malli is loaded, as a dev/test loader loads it
             #?@(:clj [[clojure.java.shell :as shell]
                       [clojure.string :as str]
@@ -114,6 +114,26 @@
   orders
 )
 
+(defn-typed keyed {
+  :a :int
+  :b [:int {:default 2}]
+  :c [{:optional true} [:maybe :int]]
+} -> :any
+  [a b c]
+)
+
+(defmeta keyed-strict
+  {:unknown-keys :error})
+
+(defn-typed keyed-strict {:a :int} -> :any a
+)
+
+(defmeta keyed-free
+  {:unknown-keys :off})
+
+(defn-typed keyed-free {:a :int} -> :any a
+)
+
 (defn- literal-caller [] (padded {:a 1}))
 
 (defn- cart-caller [] (cart-total {:items [{:price 100} {:price 5 :qty 2}]}))
@@ -158,6 +178,40 @@
   (testing "a nested map row (line-total) is filled as before"
     (is (= 100 (line-total {:item {:price 100}})))
     (is (= 300 (line-total {:item {:price 100 :qty 3}})))))
+
+(defn- warnings-of
+  "What f prints as warnings (clj: stderr, cljs: console.warn), one line each."
+  [f]
+  #?(:clj (let [err (java.io.StringWriter.)] (binding [*err* err] (f)) (str err))
+     :cljs (let [seen (atom [])
+                 before (.-warn js/console)]
+             (set! (.-warn js/console) #(swap! seen conj (str % "\n")))
+             (try (f) (apply str @seen)
+                  (finally (set! (.-warn js/console) before))))))
+
+(deftest runtime-unknown-keys
+  (testing ":warn (the default): a real map holding a key beyond the rows prints one line per (function, set of unknown keys); the call proceeds"
+    (let [m {:a 1 :zz 5}
+          same-set {:a 2 :zz 6}
+          two {:a 1 :yy 1 :zz 1}]
+      (is (= "defn-typed: defn-typed.inline-test/keyed unknown key :zz — the keys are :a :b :c\n"
+             (warnings-of #(is (= [1 2 nil] (keyed m))))))
+      (is (= "" (warnings-of #(is (= [2 2 nil] (keyed same-set))))))
+      (is (re-find #"^defn-typed: defn-typed.inline-test/keyed unknown keys (:yy :zz|:zz :yy) — the keys are :a :b :c\n$"
+                   (warnings-of #(keyed two))))))
+  (testing "no unknown key: nothing printed"
+    (let [m {:a 1 :b 3 :c nil}]
+      (is (= "" (warnings-of #(is (= [1 3 nil] (keyed m))))))))
+  (testing "defmeta :unknown-keys :error: throws that text with {:fn :unknown-keys :keys}"
+    (let [m {:a 1 :zz 2}
+          e (try (keyed-strict m) nil (catch #?(:clj Exception :cljs :default) e e))]
+      (is (= "defn-typed: defn-typed.inline-test/keyed-strict unknown key :zz — the keys are :a" (ex-message e)))
+      (is (= {:fn 'defn-typed.inline-test/keyed-strict :unknown-keys [:zz] :keys [:a]} (ex-data e))))
+    (let [m {:a 1}]
+      (is (= 1 (keyed-strict m)))))
+  (testing "defmeta :unknown-keys :off: no check"
+    (let [m {:a 1 :zz 2}]
+      (is (= "" (warnings-of #(is (= 1 (keyed-free m)))))))))
 
 (deftest self-call-by-name
   (testing "the body calls its own function by name, in call position and as a value"
@@ -525,6 +579,26 @@
          (is (= (str "defmeta f: " k " must be one of :warn, :error, :off, got :loud")
                 (try (pr-str (macroexpand-1 (list 'defn-typed.core/defmeta 'f {k :loud})))
                      (catch Exception e (ex-message (or (ex-cause e) e))))))))))
+
+#?(:clj
+   (deftest runtime-unknown-keys-expansion
+     (let [expansion (fn [setting]
+                       (binding [*ns* (the-ns 'defn-typed.inline-test)]
+                         (when setting (macroexpand-1 (list 'defn-typed.core/defmeta 'probe {:unknown-keys setting})))
+                         (macroexpand-1 '(defn-typed.core/defn-typed probe {:a :int} -> :any a))))
+           checks? (fn [form] (boolean (some #{'defn-typed.core/report-unknown-keys!} (tree-seq coll? seq form))))]
+       (testing "defmeta :off emits no check code; :warn (no defmeta) and :error do"
+         (with-project-settings {}
+           #(do (is (checks? (expansion nil)))
+                (is (checks? (expansion :error)))
+                (is (not (checks? (expansion :off)))))))
+       (testing "a project :unknown-keys :off (file or system property) emits none; the function's own value wins over it"
+         (with-project-settings {:unknown-keys :off}
+           #(do (is (not (checks? (expansion nil))))
+                (is (checks? (expansion :warn)))))
+         (with-project-settings {}
+           #(with-property "defn-typed.unknown-keys" "off"
+              (fn [] (is (not (checks? (expansion nil)))))))))))
 
 #?(:clj
    (deftest inline-setting
