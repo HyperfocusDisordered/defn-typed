@@ -21,8 +21,10 @@
    schema var (`:order Order`), (watch-schemas! #'f [#'Order]); every call site goes through
    expand-call, a redefinition with another signature reloads the namespaces whose calls compiled
    to the old positional call, and a changed schema var reloads the function's namespace
-   (`:stale-callers` in defn-typed.edn). With Typed Clojure on the classpath a clj definition then
-   calls (typed-check! #'f …), which type-checks it (`:typed-check` in defn-typed.edn).
+   (`:stale-callers` in defn-typed.edn). A definition whose defmeta holds cases runs them as it
+   loads (inout-check!, `:inout-check` in defn-typed.edn; cljs dev builds only). With Typed Clojure
+   on the classpath a clj definition then calls (typed-check! #'f …), which type-checks it
+   (`:typed-check` in defn-typed.edn).
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    `defnt` = defn-typed under a short name.
@@ -1501,9 +1503,10 @@
       var metadata in clj and cljs. Expands to (declare name) + the registration, so it runs before
       the var is defined; the keys other than the cases are also recorded in `registry` as the var's
       `:meta` (register-meta!), which is where a plain defn below keeps them. In cljs all of it is
-      under goog.DEBUG, like the cases. `:literal-check`, `:unknown-keys` and `:typed-check` (`:warn`,
-      `:error` or `:off`) are the function's own settings, winning over the project's; a bad value
-      fails here."
+      under goog.DEBUG, like the cases. `:literal-check`, `:unknown-keys`, `:typed-check` and
+      `:inout-check` (`:warn`, `:error` or `:off`) are the function's own settings, winning over the
+      project's; a bad value fails here. Written below a defn-typed of the same load, it runs the
+      cases there (inout-check!), the defn-typed having found none above it."
      [fn-name m]
      (let [fail! #(throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name}))
            cljs? (boolean (:ns &env))
