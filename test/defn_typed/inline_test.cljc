@@ -98,7 +98,25 @@
   [order address]
 )
 
+(defn-typed cart-total {
+  :items [:sequential [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]]
+} -> :int
+  (reduce + 0 (map (fn [{:keys [price qty]}] (* price qty)) items))
+)
+
+(defn-typed line-total {:item [:map [:price :int] [:qty [:int {:default 1}]]]} -> :int
+  (* (:price item) (:qty item))
+)
+
+(defn-typed nested-deep {
+  :orders [:vector [:map [:lines [:sequential [:maybe [:map [:sku :string] [:qty [:int {:default 1}]]]]]]]]
+} -> :any
+  orders
+)
+
 (defn- literal-caller [] (padded {:a 1}))
+
+(defn- cart-caller [] (cart-total {:items [{:price 100} {:price 5 :qty 2}]}))
 
 ;; a cljs number literal is a double; in clj `1` is a long, which :double rejects
 #?(:cljs (defn- double-literal-caller [] (scaled {:x 1})))
@@ -121,6 +139,25 @@
     (is (= 8 (via-symbol {:k 8}))))
   (testing "a default written as a call is evaluated once, at the def"
     (is (identical? (boxed {}) (boxed {})))))
+
+(deftest defaults-inside-sequences
+  (testing "a defaulted key of a map inside a :sequential / :vector row is filled: literal calls, literal items, a real map"
+    (is (= 100 (cart-total {:items [{:price 100}]})))
+    (is (= 250 (cart-total {:items [{:price 100} {:price 50 :qty 3}]})))
+    (let [items [{:price 100}]]
+      (is (= 100 (cart-total {:items items}))))
+    (let [m {:items [{:price 100}]}]
+      (is (= 100 (cart-total m))))
+    (is (= 100 (cart-total {:items (list {:price 100})})))
+    (is (= 0 (cart-total {:items []}))))
+  (testing "any depth: a map inside a :maybe inside a :sequential inside a map inside a :vector; nil stays nil, an explicit value stays"
+    (is (= [{:lines [{:sku "a" :qty 1} nil {:sku "b" :qty 4}]}]
+           (nested-deep {:orders [{:lines [{:sku "a"} nil {:sku "b" :qty 4}]}]})))
+    (let [m {:orders [{:lines [{:sku "a"}]}]}]
+      (is (= [{:lines [{:sku "a" :qty 1}]}] (nested-deep m)))))
+  (testing "a nested map row (line-total) is filled as before"
+    (is (= 100 (line-total {:item {:price 100}})))
+    (is (= 300 (line-total {:item {:price 100 :qty 3}})))))
 
 (deftest self-call-by-name
   (testing "the body calls its own function by name, in call position and as a value"
@@ -158,6 +195,11 @@
   (testing "switch on: a fitting literal calls the positional fn, so a redefinition of the map fn is not seen; off: it is the map call through the var"
     (with-redefs [padded (constantly :redefined)]
       (is (= (if inline? [1 2 nil] :redefined) (literal-caller))))))
+
+(deftest nested-default-literal-call-site
+  (testing "switch on: a literal whose items leave a defaulted key out is filled at compile time and calls the positional fn; off: the map call through the var"
+    (with-redefs [cart-total (constantly :redefined)]
+      (is (= (if inline? 110 :redefined) (cart-caller))))))
 
 #?(:cljs
    (deftest cljs-number-literal-call-site
@@ -204,6 +246,14 @@
      (testing "a key beyond the rows, or one that is not a keyword literal: the map call, switch on or off"
        (is (= ['.invoke `padded '{:a 1 :zz 2}] (vec ((:inline (meta #'padded)) '{:a 1 :zz 2}))))
        (is (= ['.invoke `padded '{k 1}] (vec ((:inline (meta #'padded)) '{k 1})))))))
+
+#?(:clj
+   (deftest literal-nested-defaults-at-compile-time
+     (testing "switch on: a literal call whose nested literal items leave a defaulted key out compiles to the positional call with the default filled in the literal"
+       (when inline?
+         (let [form ((:inline (meta #'cart-total)) '{:items [{:price 100}]})]
+           (is (= `cart-total--positional (first (last form))))
+           (is (= '[[{:price 100 :qty 1}]] (vec (take-nth 2 (rest (second form)))))))))))
 
 #?(:clj
    (defn- with-property
@@ -475,9 +525,45 @@
            (defn-typed.core/expand-call {:spec spec :arg {:order {:price "x"}} :fallback :map-call :cljs? true
                                          :file "f" :line 1}))
          (is (re-find #"\(shipped …\) :order :price \"x\" — should be an integer\n$" (str err)))))
+     (testing "a vector literal under a :sequential / :vector row: each item is judged against the item schema, the path holding its index; a defaulted item key may be absent"
+       (is (= "" (compile-warnings '(cart-total {:items [{:price 100}]}))))
+       (is (= "" (compile-warnings '(cart-total {:items [{:price 100} {:price 5 :qty 2}]}))))
+       (is (re-find #"^WARNING defn-typed .*: \(cart-total …\) :items 0 :price \"x\" — should be an integer\n$"
+                    (compile-warnings '(cart-total {:items [{:price "x"}]}))))
+       (is (re-find #"^WARNING defn-typed .*: \(cart-total …\) :items 0 :qtty — unknown key\n$"
+                    (compile-warnings '(cart-total {:items [{:price 100 :qtty 2}]}))))
+       (is (re-find #"^WARNING defn-typed .*: \(cart-total …\) :items 0 :price — missing required key\n$"
+                    (compile-warnings '(cart-total {:items [{:qty 2}]}))))
+       (is (re-find #"^WARNING defn-typed .*: \(cart-total …\) :items 1 :price 0 — should be at least 1\n$"
+                    (compile-warnings '(cart-total {:items [{:price 1} {:price 0}]}))))
+       (is (re-find #"\(nested-deep …\) :orders 0 :lines 1 :qty \"2\" — should be an integer\n$"
+                    (compile-warnings '(nested-deep {:orders [{:lines [nil {:sku "a" :qty "2"}]}]}))))
+       (is (re-find #"\(cart-total …\) :items 0 :qtty — unknown key\n$"
+                    (compile-warnings '(cart-total {:items '({:price 1 :qtty 2})}))))
+       (is (= "" (compile-warnings '(let [p 1] (cart-total {:items [{:price p}]}))))))
+     (testing "malli not loaded: the item key checks still run"
+       (with-redefs [find-ns (fn [sym] (when-not (= 'malli.core sym) (clojure.lang.Namespace/find sym)))]
+         (is (= "" (compile-warnings '(cart-total {:items [{:price "x"}]}))))
+         (is (re-find #"\(cart-total …\) :items 0 :qtty — unknown key; :items 1 :price — missing required key\n$"
+                      (compile-warnings '(cart-total {:items [{:price 1 :qtty 2} {:qty 2}]}))))))
+     (testing "a cljs call site walks the items against the rows as written: a defaulted item key may be absent"
+       (let [spec {:name `cart-total :props `cart-total-props
+                   :rows [{:key :items :index 1 :required true
+                           :type [:sequential [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]]}]}
+             warnings (fn [arg]
+                        (let [err (java.io.StringWriter.)]
+                          (binding [*err* err]
+                            (defn-typed.core/expand-call {:spec spec :arg arg :fallback :map-call :cljs? true
+                                                          :file "f" :line 1}))
+                          (str err)))]
+         (is (= "" (warnings {:items [{:price 100}]})))
+         (is (re-find #"\(cart-total …\) :items 0 :qtty — unknown key\n$" (warnings {:items [{:price 1 :qtty 2}]})))))
      (testing "{:literal-check :error}: a nested finding is a compile error"
        (with-project-settings {:literal-check :error}
          #(do (is (re-find #"\(shipped …\) :address :zip — unknown key$"
                            (str (compile-error '(shipped {:order {:price 1} :address {:city "H" :zip 1}})))))
               (is (re-find #"\(shipped …\) :order :sku — unknown key$"
-                           (str (compile-error '(shipped {:order {:price 1 :sku "x"} :address nil}))))))))))
+                           (str (compile-error '(shipped {:order {:price 1 :sku "x"} :address nil})))))
+              (is (re-find #"\(cart-total …\) :items 0 :qtty — unknown key$"
+                           (str (compile-error '(cart-total {:items [{:price 100 :qtty 2}]})))))
+              (is (nil? (compile-error '(cart-total {:items [{:price 100}]})))))))))

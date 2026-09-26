@@ -1,5 +1,5 @@
 (ns defn-typed.typed-bugs
-  "Typed Clojure fixture: defn-typed functions, calls that fit their schemas (ok-calls) and seven
+  "Typed Clojure fixture: defn-typed functions, calls that fit their schemas (ok-calls) and eight
    planted bugs (bug-*), each a type error the checker finds through the schemas alone. The test
    checks this file form by form (defn-typed.typed-clojure/check-form!); it is never run."
   (:require [defn-typed.core :refer [defn-typed defmeta]]))
@@ -52,6 +52,15 @@
   (if (pos? n) (recur {:n (dec n)}) n)
 )
 
+(defmeta cart-total
+  {:doc "The cart's total: a line's :qty defaults to 1."})
+
+(defn-typed cart-total {
+  :items [:sequential [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]]
+} -> :int
+  (reduce + 0 (map (fn [{:keys [price qty]}] (* price qty)) items))
+)
+
 (defn ok-calls
   "Every call fits the schemas: the checker reports nothing here."
   []
@@ -62,7 +71,9 @@
    (let [id (:id (summary-of {:id 9}))]
      (cover-of {:lot_id id :cover_photo (label-of {:name "a"}) :photo_keys ["k"]}))
    (:label (tagged {:row {:label "a"}}))
-   (inc (countdown {:n 3}))])
+   (inc (countdown {:n 3}))
+   (inc (cart-total {:items [{:price 100}]}))
+   (inc (cart-total {:items [{:price 100 :qty 2} {:price 5}]}))])
 
 (defn bug-arg-type
   "A wrong arg type into a defn-typed fn from a non-literal value (:lot_id wants [:maybe :int])."
@@ -96,6 +107,11 @@
   []
   (let [addr {:zip (label-of {:name "10115"}) :city "Berlin"}]
     (zip-of {:address addr})))
+
+(defn bug-item-type
+  "An item of a :sequential row with a wrong type (:price wants :int)."
+  []
+  (cart-total {:items [{:price "100"}]}))
 
 (defmeta lot-count
   {:doc "How many lots a label holds."})

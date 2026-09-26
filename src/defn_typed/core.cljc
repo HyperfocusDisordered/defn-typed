@@ -200,40 +200,93 @@
   (let [props (when (vector? schema) (second schema))]
     (when (map? props) props)))
 
-(defn entry-default-paths
-  "Key paths of the `[:map …]` rows of schema (nested maps included) that carry `:default` in their
-   entry props (`[k {:default v} type]`): a default lives only in the type's own props."
+(defn- items-schema
+  "The one schema a `[:sequential …]`, `[:vector …]` or `[:maybe …]` holds (its last child); nil for
+   any other schema. These are the schemas the rows of a map inside them are walked through."
   [schema]
-  (if (and (vector? schema) (= :map (first schema)))
+  (when (and (vector? schema) (#{:sequential :vector :maybe} (first schema)))
+    (peek schema)))
+
+(declare walk-rows)
+
+(defn- walk-row
+  "row = [k type] or [k row-props type], its type walked (walk-rows), then f applied to it."
+  [f row]
+  (let [[k row-props type] (row-parts row)
+        type (walk-rows f type)]
+    (f (if row-props [k row-props type] [k type]))))
+
+(defn walk-rows
+  "schema with f applied to every row of every `[:map …]` inside it, at any depth: the rows of a
+   `[:map …]` (each row's type walked first), and the maps a `[:sequential …]`, `[:vector …]` or
+   `[:maybe …]` holds. f takes and returns a row, [k type] or [k row-props type]."
+  [f schema]
+  (cond
+    (and (vector? schema) (= :map (first schema)))
+    (into [:map] (map #(if (vector? %) (walk-row f %) %)) (rest schema))
+
+    (items-schema schema) (conj (pop schema) (walk-rows f (peek schema)))
+
+    ;; any other schema holds no row walked here
+    :else schema))
+
+(defn entry-default-paths
+  "Key paths of the `[:map …]` rows of schema, at any depth (the rows walk-rows reaches), that
+   carry `:default` in their entry props (`[k {:default v} type]`): a default lives only in the
+   type's own props."
+  [schema]
+  (cond
+    (and (vector? schema) (= :map (first schema)))
     (vec (mapcat (fn [row]
                    (let [[k row-props type] (row-parts row)]
                      (concat (when (contains? row-props :default) [[k]])
                              (map #(into [k] %) (entry-default-paths type)))))
                  (filter vector? (rest schema))))
-    []))
+
+    (items-schema schema) (entry-default-paths (peek schema))
+
+    ;; any other schema holds no rows
+    :else []))
 
 (def entry-default-rule "put :default into the schema's props: [:int {:default v}]")
 
-(declare defaults-optional)
+(defn- optional-if-default
+  "row marked `{:optional true}` when its type carries `:default` in its own props."
+  [row]
+  (let [[k row-props type] (row-parts row)]
+    (if (contains? (schema-props type) :default)
+      [k (assoc row-props :optional true) type]
+      row)))
 
 (defn optional-if-defaulted
   "A `[:map …]` row marked `{:optional true}` when its type carries `:default` in its own props,
    its type's own rows marked the same way (defaults-optional). A defn-typed evaluates it at the
    def for a row whose type holds a symbol or a call, where only the value shows the default."
   [row]
-  (let [[k row-props type] (row-parts row)
-        row-props (cond-> row-props
-                    (contains? (schema-props type) :default) (assoc :optional true))]
-    (if row-props [k row-props (defaults-optional type)] [k (defaults-optional type)])))
+  (walk-row optional-if-default row))
 
 (defn defaults-optional
   "schema with every `[:map …]` row whose type carries `:default` in its own props marked
-   `{:optional true}` (nested maps included): instrumentation checks a call before with-defaults
-   fills the defaults, so a defaulted key may be absent."
+   `{:optional true}`, at any depth (walk-rows: nested maps, the maps of `:sequential`, `:vector`
+   and `:maybe`): instrumentation checks a call before the defaults are filled, so a defaulted
+   key may be absent."
   [schema]
-  (if (and (vector? schema) (= :map (first schema)))
-    (into [:map] (map #(if (vector? %) (optional-if-defaulted %) %)) (rest schema))
-    schema))
+  (walk-rows optional-if-default schema))
+
+(defn- defaults-inside?
+  "Whether a value of schema can hold a key with-defaults fills: a `[:map …]` row whose type
+   carries `:default` in its own props, at any depth (the rows walk-rows reaches)."
+  [schema]
+  (cond
+    (and (vector? schema) (= :map (first schema)))
+    (boolean (some (fn [row] (let [type (peek row)]
+                               (or (contains? (schema-props type) :default) (defaults-inside? type))))
+                   (filter vector? (rest schema))))
+
+    (items-schema schema) (defaults-inside? (peek schema))
+
+    ;; any other schema: with-defaults leaves its value as it is
+    :else false))
 
 (defn path-text
   "A key path as the loop prints it: `:a :b`; the empty path reads `(value)`."
@@ -347,17 +400,33 @@
        (or (and (map? slot) (contains? slot :default)) (symbol? slot) (seq? slot)))))
 
 #?(:clj
+   (defn- fn-symbol?
+     "Whether sym names a function where the macro expands (clj: its var holds a fn; cljs: the
+      analyzer knows it as a fn var): a predicate schema such as `number?`, whose value carries no
+      default and no rows. false for anything else (a schema held in a var, an unknown symbol)."
+     [env sym]
+     (try
+       (if (:ns env)
+         (boolean (:fn-var (@(requiring-resolve 'cljs.analyzer/resolve-var) env sym)))
+         (let [v (resolve sym)]
+           (boolean (and (var? v) (bound? v) (fn? @v)))))
+       (catch Exception _ false))))
+
+#?(:clj
    (defn- runtime-type?
      "Whether with-defaults can do more to a present value of this row type than the source shows:
-      a type that is not a keyword or a vector led by a keyword (a symbol, a call), or a `[:map …]`
-      whose rows, at any depth, may carry defaults."
-     [type]
+      a symbol that does not name a function (fn-symbol?) or a call, a vector not led by a keyword,
+      or a schema holding, at any depth (the rows walk-rows reaches), a `[:map …]` row whose type
+      may carry a default (default-slot?) or is such a type itself."
+     [env type]
      (cond
        (keyword? type) false
+       (symbol? type) (not (fn-symbol? env type))
        (vector? type) (or (not (keyword? (first type)))
                           (and (= :map (first type))
-                               (some (fn [row] (let [[_ _ t] (row-parts row)] (or (default-slot? t) (runtime-type? t))))
-                                     (filter vector? (rest type)))))
+                               (boolean (some (fn [row] (let [t (peek row)] (or (default-slot? t) (runtime-type? env t))))
+                                              (filter vector? (rest type)))))
+                          (boolean (some->> (items-schema type) (runtime-type? env))))
        :else true)))
 
 #?(:clj
@@ -490,7 +559,9 @@
       number failing a double schema (`:double`, `:float`, `double?`, `float?`) is judged again as a
       double, so `1` fits `:double` and `[:double {:min 2}]` against `1` reads `should be at least 2`."
      [{:keys [malli schema value cljs?]}]
-     (let [value (if cljs? (js-number-literal value) value)]
+     (let [value (if cljs? (js-number-literal value) value)
+           ;; a defaulted key may be absent: the value is judged before with-defaults fills it
+           schema (defaults-optional schema)]
        (when-not ((:validate malli) schema value)
          (cond->> (:errors ((:explain malli) schema value))
            cljs? (mapcat (fn [{:keys [in schema] :as error}]
@@ -514,6 +585,17 @@
          (str "does not match " (pr-str source))))))
 
 #?(:clj
+   (defn- literal-items
+     "The item forms of a sequence literal: a vector literal's items, a quoted list's items; nil for
+      any other form."
+     [form]
+     (cond
+       (vector? form) form
+       (and (seq? form) (= 'quote (first form)) (seq? (second form))) (vec (second form))
+       ;; not a sequence literal
+       :else nil)))
+
+#?(:clj
    (defn- map-schema
      "The `[:map …]` schema a map literal is judged against: schema itself, or the one inside
       `[:maybe …]`; nil for any other schema."
@@ -526,23 +608,50 @@
          nil))))
 
 #?(:clj
+   (defn- item-schema
+     "The item schema a sequence literal's items are judged against one by one: the schema of
+      `[:sequential …]` / `[:vector …]` (or one inside `[:maybe …]`) when a map schema is inside it
+      at some depth; nil for any other schema (malli judges the value whole)."
+     [schema]
+     (when (vector? schema)
+       (case (first schema)
+         (:sequential :vector) (let [item (peek schema)]
+                                 (when (or (map-schema item) (item-schema item)) item))
+         :maybe (item-schema (peek schema))
+         ;; any other schema: malli judges the value whole
+         nil))))
+
+#?(:clj
    (declare ^:private map-literal-mismatches))
 
 #?(:clj
    (defn- value-mismatches
      "Why the literal value at path does not fit schema, one text per finding: a map literal
-      against a `[:map …]` (map-schema) → the findings inside it (map-literal-mismatches); other
-      data (constant-form?) → `<path> <value> — <reason>` (mismatch-reason) when malli is loaded;
-      a symbol, a call, or no schema → none. JVM malli judges a cljs literal as JS numbers
-      (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
+      against a `[:map …]` (map-schema) → the findings inside it (map-literal-mismatches); a
+      vector literal or quoted list against a sequence of maps (item-schema) → each item's, its
+      index in the path; other data (constant-form?) → `<path> <value> — <reason>`
+      (mismatch-reason) when malli is loaded; a symbol, a call, or no schema → none. JVM malli
+      judges a cljs literal as JS numbers (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
      [{:keys [path value schema source malli cljs?]}]
-     (let [nested (map-schema schema)]
+     (let [nested (map-schema schema)
+           item (item-schema schema)
+           items (literal-items value)]
        (cond
          (and nested (map? value))
          (map-literal-mismatches {:path path :m value :malli malli :cljs? cljs?
                                   :rows (for [entry (rest nested) :when (vector? entry)
                                               :let [[k entry-props type] (row-parts entry)]]
-                                          {:key k :required (not (:optional entry-props)) :schema type :source type})})
+                                          ;; a defaulted key, or one whose type is a symbol or a call
+                                          ;; (it may carry a default), may be absent
+                                          {:key k :schema type :source type
+                                           :required (not (or (:optional entry-props) (contains? (schema-props type) :default)
+                                                              (symbol? type) (seq? type)))})})
+
+         (and item items)
+         (apply concat (map-indexed (fn [i v]
+                                      (value-mismatches {:path (conj path i) :value v :schema item :source item
+                                                         :malli malli :cljs? cljs?}))
+                                    items))
 
          (and malli (some? schema) (constant-form? value))
          (when-let [errors (try (seq (literal-errors {:malli malli :schema schema :value value :cljs? cljs?}))
@@ -588,14 +697,78 @@
                                        :schema (try (schema-of row) (catch Exception _ nil))})})))
 
 #?(:clj
+   (defn- embeddable?
+     "Whether v, written into the compiled call, evaluates to itself: nil, a boolean, number,
+      string, keyword or char, or a vector, map or set of those."
+     [v]
+     (or (nil? v) (boolean? v) (number? v) (string? v) (keyword? v) (char? v)
+         (and (or (vector? v) (map? v) (set? v))
+              (every? embeddable? (if (map? v) (mapcat identity v) v))))))
+
+#?(:clj
+   (defn- literal-fill
+     "The value form with the defaults of schema filled in where the source shows the value, as
+      fill-value fills it at run time: a map literal under `[:map …]` gets each absent key's
+      `:default` and its values filled by their rows, a vector literal or quoted list under
+      `[:sequential …]` / `[:vector …]` its items, `[:maybe …]` a non-nil form by its schema; a form
+      whose schema holds no default stays as written. ::unfilled when only the run time can fill
+      it: a symbol or a call where the schema holds defaults, a default that is not literal data
+      (embeddable?), or a map literal of up to 8 entries with a non-literal value that the defaults
+      grow past 8 (its values would then evaluate in hash order)."
+     [schema form]
+     (let [head (when (vector? schema) (first schema))
+           items (literal-items form)]
+       (cond
+         (not (defaults-inside? schema)) form
+
+         (and (= :map head) (map? form))
+         (let [filled (reduce (fn [m row]
+                                (let [[k _ type] (row-parts row)
+                                      type-props (schema-props type)]
+                                  (cond
+                                    (contains? m k) (let [v (literal-fill type (get m k))]
+                                                      (if (= ::unfilled v) (reduced ::unfilled) (assoc m k v)))
+                                    (not (contains? type-props :default)) m
+                                    (embeddable? (:default type-props)) (assoc m k (:default type-props))
+                                    :else (reduced ::unfilled))))
+                              form
+                              (filter vector? (rest schema)))]
+           (if (and (map? filled) (<= (count form) 8) (< 8 (count filled)) (not (constant-form? form)))
+             ::unfilled
+             filled))
+
+         (and (#{:sequential :vector} head) items)
+         (let [filled (mapv #(literal-fill (peek schema) %) items)]
+           (cond
+             (some #{::unfilled} filled) ::unfilled
+             (vector? form) filled
+             :else (list 'quote (apply list filled))))
+
+         (= :maybe head) (if (nil? form) form (literal-fill (peek schema) form))
+
+         ;; a symbol, a call or another shape where the schema holds defaults
+         :else ::unfilled))))
+
+#?(:clj
    (defn- literal-call
      "`(let [g v …] (positional …))` for a map-literal argument whose keys are all rows and that
       holds every required row: the values bound in the literal's own order (the order the map
-      call would evaluate them in), an absent row given its default form (nil when optional)."
-     [{:keys [positional rows]} arg]
-     (let [locals (into {} (map (fn [k] [k (gensym (str (name k) "__"))])) (keys arg))]
-       `(let [~@(mapcat (fn [[k v]] [(locals k) v]) arg)]
-          (~positional ~@(map #(get locals (:key %) (:absent %)) rows))))))
+      call would evaluate them in), an absent row given its default form (nil when optional). A
+      row read at call time (`:runtime`) takes its value with the defaults inside filled at compile
+      time (literal-fill, against `(schema-of row)`); nil when one cannot be (the map call fills
+      it)."
+     [{:keys [positional rows]} arg schema-of]
+     (let [row-of (into {} (map (juxt :key identity)) rows)
+           values (into [] (map (fn [[k v]]
+                                  (let [row (row-of k)]
+                                    [k (if (:runtime row)
+                                         (if-let [schema (schema-of row)] (literal-fill schema v) ::unfilled)
+                                         v)])))
+                        arg)
+           locals (into {} (map (fn [k] [k (gensym (str (name k) "__"))])) (keys arg))]
+       (when-not (some #(= ::unfilled (second %)) values)
+         `(let [~@(mapcat (fn [[k v]] [(locals k) v]) values)]
+            (~positional ~@(map #(get locals (:key %) (:absent %)) rows)))))))
 
 #?(:clj
    (defn expand-call
@@ -628,8 +801,10 @@
              (if (and inline? (not mismatches) (:positional spec)
                       ;; a key that is not a keyword literal (unjudged, may be any key): the map call
                       (every? (set (map :key (:rows spec))) (keys arg)))
-               (do (when-not cljs? (warn-if-instrumented!))
-                   (literal-call spec arg))
+               (if-let [call (literal-call spec arg schema-of)]
+                 (do (when-not cljs? (warn-if-instrumented!))
+                     call)
+                 fallback)
                fallback)))
          (catch Exception e
            (if (::literal-mismatches (ex-data e)) (throw e) fallback))))))
@@ -731,11 +906,16 @@
               rows (vec (map-indexed
                          (fn [i row]
                            (let [[k row-props type] (row-parts row)
+                                 runtime (runtime-type? &env type)
                                  plan {:key k :local (symbol (name k)) :binding (symbol (namespace k) (name k))
                                        :type type :props q-props :index (inc i)}]
-                             (cond-> (assoc plan :runtime (runtime-type? type))
+                             (cond-> (assoc plan :runtime runtime)
                                (default-slot? type) (assoc :absent (default-form plan))
                                (and (not (default-slot? type)) (:optional row-props)) (assoc :absent nil)
+                               ;; a row read at call time whose type is a symbol or a call: its
+                               ;; default, if any, shows only in the evaluated schema
+                               (and runtime (not (default-slot? type)) (or (symbol? type) (seq? type)))
+                               (assoc :absent `(:default (schema-props (peek (nth ~q-props ~(inc i))))))
                                ;; a type written as a symbol or a call may carry a default: not judged
                                (not (or (default-slot? type) (:optional row-props) (symbol? type) (seq? type)))
                                (assoc :required true))))
@@ -760,9 +940,9 @@
               meta-keys (dissoc (get @pending-meta q) :inout-tests)
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
               spec (cond-> {:name q :props q-props
-                            :rows (mapv #(select-keys % [:key :index :type :absent :required]) rows)}
+                            :rows (mapv #(select-keys % [:key :index :type :absent :required :runtime]) rows)}
                      ;; a :malli-in-prod call must pass the check in name: never the positional call
-                     (and positional? (not-any? :runtime rows) (not malli-opts))
+                     (and positional? (not malli-opts))
                      (assoc :positional (qualified &env positional)))
               ;; the map's rows as a destructuring arglist, so doc and editors show the inputs, not m
               arglists (list 'quote (list [{:keys (mapv :binding rows)}]))
@@ -843,32 +1023,47 @@
 
 (declare with-defaults)
 
+(defn- fill-value
+  "value with the defaults schema holds filled at any depth: a map under `[:map …]` (with-defaults),
+   each item of a sequential value under `[:sequential …]` / `[:vector …]` whose item schema holds
+   defaults (defaults-inside?; a vector stays a vector), the value under `[:maybe …]` by its schema;
+   anything else, nil included, is value itself."
+  [schema value]
+  (case (when (vector? schema) (first schema))
+    :map (if (map? value) (with-defaults schema value) value)
+    :maybe (fill-value (peek schema) value)
+    (:sequential :vector) (let [items (peek schema)]
+                            (cond
+                              (not (and (sequential? value) (defaults-inside? items))) value
+                              (vector? value) (mapv #(fill-value items %) value)
+                              :else (map #(fill-value items %) value)))
+    ;; any other schema: with-defaults leaves its value as it is
+    value))
+
 (defn- fill-row
   "m with row's key filled as with-defaults fills it: absent → the `:default` of the row type's own
-   props (when it has one), a map value of a `[:map …]` row → filled the same way, else unchanged."
+   props (when it has one), present → its value filled by the row type (fill-value)."
   [m row]
   (let [[k _ type] (row-parts row)
         type-props (schema-props type)]
-    (cond
-      (not (contains? m k))
-      (cond-> m (contains? type-props :default) (assoc k (:default type-props)))
-
-      (and (vector? type) (= :map (first type)) (map? (get m k)))
-      (update m k #(with-defaults type %))
-
-      :else m)))
+    (if (contains? m k)
+      (let [value (get m k)
+            filled (fill-value type value)]
+        (if (identical? value filled) m (assoc m k filled)))
+      (cond-> m (contains? type-props :default) (assoc k (:default type-props))))))
 
 (defn with-defaults
   "props with the default of every `[:map …]` row whose key props lacks, the `:default` of the
    row type's own props (`[:a [:int {:default 1}]]`); a present key, explicit nil included, is
-   kept. Row = [k type] or [k row-props type]; a row whose type is a `[:map …]` vector and whose
-   value in props is a map is filled the same way. nil props = {}."
+   kept. Row = [k type] or [k row-props type]; a present value is filled by its row's type at any
+   depth: a map under `[:map …]`, the items of `[:sequential …]` / `[:vector …]`, a value under
+   `[:maybe …]`. nil props = {}."
   [schema props]
   (reduce fill-row (or props {}) (filter vector? (rest schema))))
 
 (defn row-value
   "The value with-defaults gives row's key of m: what a defn-typed binds for a row whose defaults
-   only the evaluated schema shows (a symbol or a call as its type, nested defaults)."
+   only the evaluated schema shows (a symbol or a call as its type, defaults inside its type)."
   [row m]
   (get (fill-row m row) (first row)))
 
@@ -879,7 +1074,10 @@
    [[[:map [:a [:maybe {:default 1} :int]]] {:a nil}]                            {:a nil}]
    [[[:map [:n [:map [:b [:string {:default "x"}]]]]] {:n {}}]                   {:n {:b "x"}}]
    [[[:map [:a {:default 1} :int]] {}]                                           {}]
-   [[[:map {:closed true} [:a :int] [:b {:optional true} :int]] nil]             {}]])
+   [[[:map {:closed true} [:a :int] [:b {:optional true} :int]] nil]             {}]
+   [[[:map [:s [:sequential [:map [:q [:int {:default 1}]]]]]] {:s [{} {:q 2}]}]  {:s [{:q 1} {:q 2}]}]
+   [[[:map [:v [:vector [:maybe [:map [:q [:int {:default 1}]]]]]]] {:v [nil {}]}] {:v [nil {:q 1}]}]
+   [[[:map [:s [:sequential [:map [:q [:int {:default 1}]]]]]] {:s nil}]          {:s nil}]])
 
 (defn-typed.core/tests #'schema-props
   [[[[:int {:min 1 :default 1}]] {:min 1 :default 1}]
@@ -889,6 +1087,7 @@
 (defn-typed.core/tests #'entry-default-paths
   [[[[:map [:a {:default 1} :int] [:b [:int {:default 2}]]]]  [[:a]]]
    [[[:map [:n [:map [:c {:default "x"} :string]]]]]         [[:n :c]]]
+   [[[:map [:s [:sequential [:map [:c {:default 1} :int]]]]]] [[:s :c]]]
    [[:int]                                                   []]])
 
 (defn-typed.core/tests #'defaults-optional
@@ -898,6 +1097,8 @@
     [:map [:c {:optional true} [:maybe :int]]]]
    [[[:map [:n [:map [:b [:string {:default "x"}]]]]]]
     [:map [:n [:map [:b {:optional true} [:string {:default "x"}]]]]]]
+   [[[:map [:s [:vector [:maybe [:map [:q [:int {:default 1}]]]]]]]]
+    [:map [:s [:vector [:maybe [:map [:q {:optional true} [:int {:default 1}]]]]]]]]
    [[:int]                                    :int]])
 
 (defn malli-reasons

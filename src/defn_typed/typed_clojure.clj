@@ -11,7 +11,7 @@
    - `check-form!` checks one top-level form without evaluating it and returns its type errors
      as data, each marked whether it involves a defn-typed function."
   (:require [clojure.string :as str]
-            [defn-typed.core :refer [defn-typed defmeta]]
+            [defn-typed.core :refer [defn-typed defmeta schema-props walk-rows]]
             [malli.core :as m]
             [malli.instrument :as mi]
             [typed.clj.checker :as checker]
@@ -39,17 +39,27 @@
     (when (and props-var (vector? schema) (= :=> (first schema)))
       {:name sym :props @props-var :out (peek schema)})))
 
+(defn- required-if-default
+  "row without `:optional` when its type carries `:default` in its own props: the body sees the
+   key filled."
+  [[k row-props type :as row]]
+  (if (and (map? row-props) (contains? (schema-props type) :default))
+    (let [row-props (not-empty (dissoc row-props :optional))]
+      (if row-props [k row-props type] [k type]))
+    row))
+
 (defn- fn-anns
   "The `t/ann` forms of the defn-typed function f (defn-typed-fn): `<name>-props` as t/Any, the
    body fn `<name>--positional` (the rows' types in entry order, a row optional without a default
-   nilable) or `<name>--body` (the map), each returning the
-   output's type."
+   nilable, typed as the body sees them: every defaulted key present, at any depth) or
+   `<name>--body` (the map), each returning the output's type."
   [{:keys [name props out]}]
   (let [sibling #(symbol (namespace name) (str (clojure.core/name name) %))
-        rows (m/children (m/schema props))
+        filled (walk-rows required-if-default props)
+        rows (m/children (m/schema filled))
         row-types (for [[_ entry-props schema] rows
                         :let [row-type (type-of schema)]]
-                    (if (and (:optional entry-props) (not (contains? (m/properties schema) :default)))
+                    (if (:optional entry-props)
                       `(t/Nilable ~row-type)
                       row-type))
         positional (resolve (sibling "--positional"))

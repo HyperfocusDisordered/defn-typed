@@ -124,6 +124,31 @@
   [q k]
 )
 
+(defn-typed cart-total {
+  :items [:sequential [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]]
+} -> :int
+  (reduce + 0 (map (fn [{:keys [price qty]}] (* price qty)) items))
+)
+
+(deftest defaults-inside-sequences-are-optional
+  (testing "a map row with a default inside a :sequential / :vector / :maybe row is marked {:optional true} in <name>-props, at any depth"
+    (is (= [:map [:items [:sequential [:map [:price [:int {:min 1}]] [:qty {:optional true} [:int {:min 1 :default 1}]]]]]]
+           cart-total-props))
+    (is (= '(def f-props [:map [:o [:vector [:map [:l [:sequential [:maybe [:map [:q {:optional true} [:int {:default 1}]]]]]]]]]])
+           (second (macroexpand-1 '(defn-typed.core/defn-typed f {:o [:vector [:map [:l [:sequential [:maybe [:map [:q [:int {:default 1}]]]]]]]]} -> :any o))))))
+  (testing "a row with no default inside is destructured, not read at call time: a predicate symbol (number?, map?) carries no default"
+    (doseq [row '[[:maybe number?] [:vector map?] [:sequential [:map [:a :int]]] number?]]
+      (let [expansion (macroexpand-1 (list 'defn-typed.core/defn-typed 'f {:a row} '-> :any 'a))]
+        (is (not-any? #{`core/row-value} (tree-seq coll? seq expansion))
+            (pr-str row)))))
+  (testing "a row with a default inside a :sequential row is read at call time"
+    (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a [:sequential [:map [:q [:int {:default 1}]]]]} -> :any a))]
+      (is (some #{`core/row-value} (tree-seq coll? seq expansion)))))
+  (testing ":default in the entry props of a map row inside a :sequential row fails at compile time naming its path"
+    (is (re-find #"^defn-typed f: :items :qty · put :default into the schema's props"
+                 (try (pr-str (macroexpand-1 '(defn-typed.core/defn-typed f {:items [:sequential [:map [:qty {:default 1} :int]]]} -> :any items)))
+                      (catch Exception e (ex-message (or (ex-cause e) e))))))))
+
 (deftest defn-typed-schema-is-instrumented
   (mi/collect! {:ns ['defn-typed.core-test]})
   (mi/instrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]})
@@ -140,6 +165,14 @@
         (is (= [{:a "x"}] (vec (:args (:data data)))))
         (testing "malli-reasons: one `<key path> · <message> · got <value>` line per failing key"
           (is (= [":a · should be an integer · got \"x\""] (core/malli-reasons (core/malli-fns) data))))))
+    (testing "an item of a :sequential row may leave its defaulted key out (a real map, instrumented); a wrong item type is rejected naming its path"
+      (let [m {:items [{:price 100}]}]
+        (is (= 100 (cart-total m))))
+      (let [m {:items [{:price 100} {:price "x"}]}
+            data (try (cart-total m) nil
+                      (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+        (is (= :malli.core/invalid-input (:type data)))
+        (is (= [":items 1 :price · should be an integer · got \"x\""] (core/malli-reasons (core/malli-fns) data)))))
     (testing "a row whose props slot or type is a symbol and carries a default is optional in <name>-props, so an instrumented call may leave it out"
       (is (= [:map [:q {:optional true} [:int {:default 3}]] [:k {:optional true} [:int {:default 7}]]] symslot-props))
       (is (= [3 7] (symslot {}))))
@@ -239,7 +272,9 @@
       (is (= [others [4 "defn-typed: :x/b and :y/b both bind b"]]
              (lint "(defn-typed f {:x/b :int :y/b :int} -> :any b)")))
       (is (= [others [4 "defn-typed: metadata on the argument table is not supported; declare data as a row, e.g. {:row :map}"]]
-             (lint "(defn-typed f ^{:closed true} {:a :int} -> :any a)")))))
+             (lint "(defn-typed f ^{:closed true} {:a :int} -> :any a)")))
+      (is (= [others [4 "defn-typed: :items :qty · put :default into the schema's props: [:int {:default v}]"]]
+             (lint "(defn-typed f {:items [:sequential [:map [:qty {:default 1} :int]]]} -> :any items)")))))
   (testing "the macro throws a compile error naming the same problem (an odd map literal is the reader's error)"
     (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
       (is (= "defmeta 5: the first argument must be the function's name" (error '(defn-typed.core/defmeta 5 {:doc "x"}))))
