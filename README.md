@@ -42,6 +42,8 @@ ways to get there have an API no human wants to read next to their code. defn-ty
 shape, and builds everything else from the one signature:
 
 - **static checks**: clj-kondo flags wrong keys and types as you type (see Static checking);
+- **type checking** (optional, clj): Typed Clojure checks bodies and call sites against the same
+  signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
 - **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
   during the build (see Compile-time literal checks);
 - **runtime contracts**: every call is checked in the REPL and in tests;
