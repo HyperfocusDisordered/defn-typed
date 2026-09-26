@@ -1029,18 +1029,16 @@
    defaults (defaults-inside?; a vector stays a vector), the value under `[:maybe …]` by its schema;
    anything else, nil included, is value itself."
   [schema value]
-  (let [head (when (vector? schema) (first schema))
-        items (items-schema schema)]
-    (cond
-      (= :map head) (if (map? value) (with-defaults schema value) value)
-
-      (= :maybe head) (fill-value items value)
-
-      (and items (sequential? value) (defaults-inside? items))
-      (if (vector? value) (mapv #(fill-value items %) value) (map #(fill-value items %) value))
-
-      ;; no defaults inside, or a value of another shape: as it is
-      :else value)))
+  (case (when (vector? schema) (first schema))
+    :map (if (map? value) (with-defaults schema value) value)
+    :maybe (fill-value (peek schema) value)
+    (:sequential :vector) (let [items (peek schema)]
+                            (cond
+                              (not (and (sequential? value) (defaults-inside? items))) value
+                              (vector? value) (mapv #(fill-value items %) value)
+                              :else (map #(fill-value items %) value)))
+    ;; any other schema: with-defaults leaves its value as it is
+    value))
 
 (defn- fill-row
   "m with row's key filled as with-defaults fills it: absent → the `:default` of the row type's own
