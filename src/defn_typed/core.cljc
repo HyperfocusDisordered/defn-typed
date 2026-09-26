@@ -108,6 +108,27 @@
   #?(:clj (binding [*out* *err*] (println text))
      :cljs (js/console.error text)))
 
+(defonce ^{:doc "The [fn #{unknown key …}] pairs report-unknown-keys! has printed: one line each per process."}
+  unknown-keys-reported
+  (atom #{}))
+
+(defn report-unknown-keys!
+  "Reports the keys of a real map a defn-typed function got that are not rows of its input, as its
+   `:unknown-keys` setting (mode) says: `:warn` prints `defn-typed: <ns/fn> unknown key :k — the keys
+   are :a :b` once per (fn, set of unknown keys) per process (clj stderr, cljs console.warn) and the
+   call proceeds; `:error` throws an ex-info of that text with `{:fn :unknown-keys :keys}`."
+  [{fn-name :fn row-keys :keys :keys [mode unknown-keys]}]
+  (let [text (str "defn-typed: " fn-name " unknown key" (when (next unknown-keys) "s") " "
+                  (apply str (interpose " " (map pr-str unknown-keys)))
+                  " — the keys are " (apply str (interpose " " (map pr-str row-keys))))]
+    (if (= :error mode)
+      (throw (ex-info text {:fn fn-name :unknown-keys unknown-keys :keys row-keys}))
+      (let [reported [fn-name (set unknown-keys)]
+            [before] (swap-vals! unknown-keys-reported conj reported)]
+        (when-not (contains? before reported)
+          #?(:clj (binding [*out* *err*] (println text))
+             :cljs (js/console.warn text)))))))
+
 (defonce ^{:doc "The fn that builds the checker of a `:malli-in-prod` function from its slot's spec, or nil.
    `defn-typed.malli-in-prod` sets it when it loads; this namespace never loads malli."}
   malli-checker-builder
@@ -878,7 +899,9 @@
       compile time; a row whose defaults only the evaluated schema shows (runtime-type?) is bound
       through row-value. Instrumentation checks the call
       before the defaults are filled, so the macro marks a defaulted row `{:optional true}`
-      (defaults-optional). Every call site goes through expand-call (clj `:inline`, cljs a macro of
+      (defaults-optional). name, called with a real map, reports its keys beyond the rows
+      (report-unknown-keys!) as the `:unknown-keys` setting says (the defmeta's, else the project's);
+      `:off` emits no such code. Every call site goes through expand-call (clj `:inline`, cljs a macro of
       the same name, release builds only): a map literal is checked at compile time, and with the
       switch on (inline-on?) a fitting literal compiles to the positional call. Its docstring and
       cases go into `defmeta` above it. `:default` in a row's entry props is a compile error."
@@ -949,6 +972,18 @@
               ;; the defmeta written above: its keys other than the cases go into the defn's attr-map,
               ;; so :doc is the var's docstring in clj and cljs alike
               meta-keys (dissoc (get @pending-meta q) :inout-tests)
+              ;; a real map's keys beyond the rows, reported by name's :unknown-keys; no code for :off
+              unknown-keys (let [project (setting :unknown-keys)] (or (:unknown-keys meta-keys) project))
+              key-check (when (not= :off unknown-keys)
+                          (let [unknown (gensym "unknown")
+                                k (gensym "k")
+                                row-keys (mapv :key rows)]
+                            (plumbing
+                             `(when (map? ~m)
+                                (when-let [~unknown (reduce-kv (fn [~unknown ~k ~'_]
+                                                                 (case ~k ~(apply list row-keys) ~unknown (conj (or ~unknown []) ~k)))
+                                                               nil ~m)]
+                                  (report-unknown-keys! {:fn '~q :mode ~unknown-keys :unknown-keys ~unknown :keys ~row-keys}))))))
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
               spec (cond-> {:name q :props q-props
                             :rows (mapv #(select-keys % [:key :index :type :absent :required :runtime]) rows)}
@@ -980,6 +1015,7 @@
                  ~@(when positional? [`(declare ~fn-name) body-defn])
                  ;; positional: name only binds the rows and calls the body; else the body is here
                  ~(cond-> `(defn ~fn-name ~attrs [~m]
+                             ~@(when key-check [key-check])
                              ~call)
                     positional? plumbing))
               ;; :malli-in-prod: name checks the map and the result around the body, which lives in
@@ -997,6 +1033,7 @@
                    ~(or body-defn `(defn ~body-fn {:no-doc true} [~m] ~call))
                    ~(plumbing
                      `(defn ~fn-name ~attrs [~m]
+                        ~@(when key-check [key-check])
                         (let [~checker (malli-checker ~slot)
                               ~check? (malli-check? ~checker)]
                           (when ~check? (malli-check! ~checker :input ~m))
