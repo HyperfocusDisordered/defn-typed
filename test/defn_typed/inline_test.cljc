@@ -218,7 +218,9 @@
    (deftest literal-is-positional-by-default
      (testing "property unset: a fitting literal compiles to the positional call; `false`: the map call through the var"
        (is (= `padded--positional
-              (first (last (with-inline-property nil #((:inline (meta #'padded)) '{:a 1}))))))
+              ;; *err*: the once-per-JVM instrumentation line, when malli.instrument is loaded
+              (first (last (binding [*err* (java.io.StringWriter.)]
+                             (with-inline-property nil #((:inline (meta #'padded)) '{:a 1})))))))
        (is (= ['.invoke `padded '{:a 1}]
               (vec (with-inline-property "false" #((:inline (meta #'padded)) '{:a 1}))))))))
 
