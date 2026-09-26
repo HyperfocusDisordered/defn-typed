@@ -64,6 +64,12 @@
     (is (= {:doc "a + b, b defaulting to 2."} (:meta (get @core/registry `padded))))
     (is (= {:var `padded :cases 2 :failures []} (core/check-var #'padded)))))
 
+(defn-typed cart-total {
+  :items [:sequential [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]]
+} -> :int
+  (reduce + 0 (map (fn [{:keys [price qty]}] (* price qty)) items))
+)
+
 (mi/collect! {:ns [defn-typed.core-test]})
 
 (deftest defn-typed-schema-is-instrumented
@@ -79,5 +85,13 @@
                       (catch :default e (ex-data e)))]
         (is (= :malli.core/invalid-input (:type data)))
         (is (= [{:a "x"}] (vec (:args (:data data)))))))
+    (testing "an item of a :sequential row may leave its defaulted key out; a wrong item type is rejected at its path"
+      (let [m {:items [{:price 100}]}]
+        (is (= 100 (cart-total m))))
+      (let [m {:items [{:price "x"}]}
+            data (try (cart-total m) nil
+                      (catch :default e (ex-data e)))]
+        (is (= :malli.core/invalid-input (:type data)))
+        (is (= [[0 :items 0 :price]] (mapv :in (:errors (:data data)))))))
     (finally
       (mi/unstrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]}))))

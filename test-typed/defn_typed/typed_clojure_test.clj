@@ -1,7 +1,7 @@
 (ns defn-typed.typed-clojure-test
   "Typed Clojure over defn-typed code (clojure -M:typed): install! makes the checker know the
    fixture's defn-typed functions from their schemas alone, then check-form! checks the fixture
-   file form by form — the seven planted bugs are reported and involve a defn-typed function,
+   file form by form — the eight planted bugs are reported and involve a defn-typed function,
    every other form (the defn-typed forms included) is clean."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
@@ -38,12 +38,13 @@
    '[defn bug-returned-field-arg]  "Function cover-of could not be applied to arguments:"
    '[defn bug-returned-field-use]  "Function inc could not be applied to arguments:"
    '[defn bug-nested-built-apart]  "Function zip-of could not be applied to arguments:"
+   '[defn bug-item-type]           "Function cart-total could not be applied to arguments:"
    '[defn-typed lot-count]         "Type mismatch:"})
 
 (deftest install-annotates-every-defn-typed-function
   ;; 2 defn-typed.core vars; per function its -props, plus --positional when the body is there
   ;; (countdown recurs to itself: its body stays in the var, which typed.malli's provider types)
-  (is (= (+ 2 (* 2 6) 1) @installed)))
+  (is (= (+ 2 (* 2 7) 1) @installed)))
 
 (deftest the-planted-bugs-are-reported
   (doseq [[form message] planted]
