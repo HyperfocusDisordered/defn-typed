@@ -12,7 +12,7 @@
 
 (deftest readme-examples-compile-and-pass
   (let [blocks (readme-examples)]
-    (is (= 4 (count blocks)))
+    (is (= 5 (count blocks)))
     (binding [*ns* *ns*]
       (load-string (apply str blocks))))
   (testing "their defmeta cases run against their defn-typed fns"

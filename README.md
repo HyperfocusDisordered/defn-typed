@@ -9,12 +9,36 @@ compile-time literal checks and example tests, and a call costs what a positiona
 
 ## Examples
 
-### Micro — `fizzbuzz`
+### Micro — `greet`
 
 <!-- readme-test -->
 ```clojure
 (ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
 
+(defn-typed greet {:name :string} -> :string
+  (str "Hi, " name))
+
+(greet {:name "Ann"}) ;=> "Hi, Ann"
+```
+
+```clojure
+(greet {:name 42})
+;; clj-kondo: error: Expected: integer, received: string.
+;; malli: :name · should be a string · got 42
+(greet {:nme "Ann"})
+;; compiler: WARNING defn-typed …: (greet …) :name — missing required key
+(greet {:name "Ann"})
+;; compiled: (greet {:name "Ann"}) → (greet--positional "Ann")
+(defn-typed greet {:name :string} -> :string (count name))
+;; Typed Clojure: Type mismatch:
+```
+
+clj compiles literal calls positionally by default, cljs in release builds, see [Zero-cost calls](#zero-cost-calls).
+
+### Docs and example tests — `fizzbuzz`
+
+<!-- readme-test -->
+```clojure
 (defmeta fizzbuzz
   {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
    :inout-tests [[{:n 1}  "1"]
@@ -33,12 +57,10 @@ compile-time literal checks and example tests, and a call costs what a positiona
 (fizzbuzz {:n 15}) ;=> "FizzBuzz"
 ```
 
-Under this form:
-
-- As you type, clj-kondo rejects a string input: `should be an integer`.
-- With instrumentation, the same call throws: `should be an integer`.
-- In a release build, the literal call becomes `(fizzbuzz--positional 15)`; see [Zero-cost calls](#zero-cost-calls).
-- Typed Clojure rejects a numeric body for `-> :string`: `Type mismatch:`.
+```clojure
+(check-var #'fizzbuzz)
+;; output: {:var example/fizzbuzz, :cases 5, :failures []}
+```
 
 ### Defaults, ranges, docs, example tests — `order-total`
 
@@ -62,12 +84,18 @@ Under this form:
 (order-total {:price 100 :qty 3 :discount 10}) ;=> 270
 ```
 
-Under this form:
-
-- Defaults fill at compile time: `:qty 1` and `:discount 0`.
-- A literal out-of-range call warns during the build: `:discount 150 — should be at most 100`.
-- The `[in out]` pairs run as tests: `{:cases 3, :failures []}`.
-- `(doc order-total)` shows `([{:keys [price qty discount]}])` and `Order total: price × qty, minus a percent discount.`.
+```clojure
+(order-total {:price 100})
+;; output: 100
+;; compile-time defaults: :qty 1, :discount 0
+(order-total {:price 100 :discount 150})
+;; compiler: WARNING defn-typed … :discount 150 — should be at most 100
+(check-var #'order-total)
+;; output: {:var example/order-total, :cases 3, :failures []}
+(doc order-total)
+;; output: ([{:keys [price qty discount]}])
+;; output: Order total: price × qty, minus a percent discount.
+```
 
 ### Nested map — `line-total`
 
@@ -89,12 +117,17 @@ Under this form:
 (line-total {:item {:price 100 :qty 2} :discount 50}) ;=> 100
 ```
 
-Under this form:
+```clojure
+(line-total {:item {:price 100}})
+;; output: 100
+;; compile-time nested default: :qty 1
+(line-total {:item {:price "x"}})
+;; compiler: WARNING defn-typed … :item :price "x" — should be an integer
+(line-total {:item {:price "x"}})
+;; clj-kondo: error: Expected: integer, received: string.
+```
 
-- The nested `:qty` default fills to `1`.
-- A literal wrong nested value warns with its key path: `:item :price "x" — should be an integer`.
-- clj-kondo flags the nested wrong type: `should be an integer`.
-- Nested values stay maps; only the outer map is argument syntax.
+Nested values stay maps; only the outer map is argument syntax.
 
 ### A real one — `invite-token-of`
 
@@ -120,7 +153,7 @@ A real one, from the app this library was extracted from:
 )
 ```
 
-The four blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
+The five blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
 
 ## Why
 
@@ -193,11 +226,14 @@ see Static checking.
 - `defn-typed` (the function): a map input `{key schema …}`, an `->` output schema, then the body.
   Every row key is a local in the body, defaults already filled.
 
-The schemas are [malli](https://github.com/metosin/malli) schemas, stored as plain `:malli/schema`
-var metadata. They check calls only where a dev/test/REPL loader runs malli's instrumentation;
-a production build carries them as data and never loads malli (unless functions opt in, see
-[malli in production](#malli-in-production)). The example pairs run as tests
-(`check-var`, `check-ns`, `deftests!`).
+The schemas are [malli](https://github.com/metosin/malli) schemas: plain data, the most complete
+ready-made schema language in Clojure, and they read as argument declarations. The checks come from
+the tools that consume them. clj-kondo and Typed Clojure check statically (through malli's clj-kondo
+type export and typed.malli). The build checks literal calls. malli's instrumentation checks every
+call at run time in dev, tests and the REPL. The schemas are stored as plain `:malli/schema` var
+metadata. A production build carries them as data and never loads malli (unless functions opt in, see
+[malli in production](#malli-in-production)). The example pairs run as tests (`check-var`,
+`check-ns`, `deftests!`).
 
 Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
