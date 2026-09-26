@@ -371,12 +371,27 @@
 
 #?(:clj
    (defn- inline-on?
-     "The zero-cost switch: clj — JVM system property `defn-typed.inline=true`; cljs — the
-      compiler's `:optimizations` is `:advanced` (a release build)."
+     "Whether a fitting literal call compiles to the positional call: clj — unless the JVM system
+      property `defn-typed.inline` is `false` (a dev/test alias sets it, so the call goes through
+      the instrumented var); cljs — the compiler's `:optimizations` is `:advanced` (a release build)."
      [cljs?]
      (if cljs?
        (= :advanced (some-> (resolve 'cljs.env/*compiler*) deref deref :options :optimizations))
-       (= "true" (System/getProperty "defn-typed.inline")))))
+       (not= "false" (System/getProperty "defn-typed.inline")))))
+
+#?(:clj
+   (defonce ^:private instrumentation-warned
+     (atom false)))
+
+#?(:clj
+   (defn- warn-if-instrumented!
+     "Prints one stderr line per JVM when a literal call compiles to the positional call while
+      malli.instrument is loaded: instrumentation wraps the var, which that call skips."
+     []
+     (when (and (find-ns 'malli.instrument) (compare-and-set! instrumentation-warned false true))
+       (binding [*out* *err*]
+         (println (str "defn-typed: literal calls compile to positional calls, instrumentation will not check them"
+                       " — set -Ddefn-typed.inline=false in your dev/test alias"))))))
 
 #?(:clj
    (defn- malli-check-fns
@@ -498,7 +513,8 @@
            (if (and inline? (not mismatches) (:positional spec)
                     ;; a key beyond the rows (open map) or not a keyword literal: the map call
                     (every? (set (map :key (:rows spec))) (keys arg)))
-             (literal-call spec arg)
+             (do (when-not cljs? (warn-if-instrumented!))
+                 (literal-call spec arg))
              fallback)))
        (catch Exception _ fallback))))
 
@@ -506,8 +522,9 @@
    (defn- install-cljs-expander!
      "Makes `name` a macro for the cljs analyzer, beside the fn of that name: interned in the clj
       namespace of the same name (where the analyzer looks up `alias/name` and `ns/name`) and
-      recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns). Value
-      position keeps resolving the fn. Called in a release (`:advanced`) build only: a cached
+      recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns) and among
+      its analyzed `:macros` (so a namespace that `:refer`s name gets it into its `:use-macros`,
+      shadow-cljs infer-macro-use). Value position keeps resolving the fn. Called in a release (`:advanced`) build only: a cached
       analysis holding that `:use-macros` entry needs the clj macro ns, which a fresh JVM lacks, so
       shadow-cljs recompiles such a ns on every build; a dev build keeps its cache and plain calls. A clj var of that name that is not such an expander (a
       .cljc loaded on the JVM) stays untouched: that fn then has no expander."
@@ -528,7 +545,12 @@
                              form)))]
            (.setMacro ^clojure.lang.Var v)
            (swap! @(resolve 'cljs.env/*compiler*)
-                  assoc-in [:cljs.analyzer/namespaces ns-sym :use-macros fn-name] ns-sym))))))
+                  update-in [:cljs.analyzer/namespaces ns-sym]
+                  #(-> %
+                       (assoc-in [:use-macros fn-name] ns-sym)
+                       ;; the ns's analyzed macros: a namespace compiled later that `:refer`s name
+                       ;; gets it as a macro too (shadow-cljs infer-macro-use reads this map)
+                       (assoc-in [:macros fn-name] {:name (symbol (str ns-sym) (str fn-name)) :ns ns-sym :macro true}))))))))
 
 #?(:clj
    (defmacro defn-typed
