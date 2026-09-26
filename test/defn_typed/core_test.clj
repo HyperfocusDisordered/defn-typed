@@ -356,3 +356,15 @@
         (finally
           (remove-ns 'cljs.env)
           (remove-ns 'n1.shared-jvm))))))
+
+(deftest typed-check-without-typed-clojure
+  (testing "Typed Clojure not on the classpath (this suite): a definition whose body contradicts its output schema prints nothing, emits no check, never loads the bridge"
+    (let [err (java.io.StringWriter.)]
+      (binding [*err* err
+                *ns* (the-ns 'defn-typed.core-test)
+                *file* "defn_typed/core_test.clj"]
+        (eval '(defn-typed.core/defn-typed mistyped {:n :int} -> :string n)))
+      (is (= "" (str err))))
+    (is (not-any? #(and (seq? %) (= 'defn-typed.core/typed-check! (first %)))
+                  (macroexpand-1 '(defn-typed.core/defn-typed f {:n :int} -> :string n))))
+    (is (nil? (find-ns 'defn-typed.typed-clojure)))))

@@ -491,14 +491,15 @@
          (let [file (fn [content] (let [root (settings-tree {"defn-typed.edn" content})] (java.io.File. root "defn-typed.edn")))
                error (fn [content] (try (settings-of-file (file content)) nil
                                         (catch clojure.lang.ExceptionInfo e (ex-message e))))]
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload} (settings-of-file nil)))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload} (settings-of-file (file "{}"))))
-           (is (= {:literal-check :error :unknown-keys :warn :inline true :stale-callers :reload} (settings-of-file (file "{:literal-check :error}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline false :stale-callers :reload} (settings-of-file (file "{:literal-check :warn :inline false}"))))
-           (is (= {:literal-check :off :unknown-keys :off :inline true :stale-callers :reload} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
-           (is (= {:literal-check :warn :unknown-keys :error :inline true :stale-callers :reload} (settings-of-file (file "{:unknown-keys :error}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn} (settings-of-file (file "{:stale-callers :warn}"))))
-           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline, :stale-callers$"
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn} (settings-of-file nil)))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn} (settings-of-file (file "{}"))))
+           (is (= {:literal-check :error :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:literal-check :error}"))))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline false :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:literal-check :warn :inline false}"))))
+           (is (= {:literal-check :off :unknown-keys :off :inline true :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
+           (is (= {:literal-check :warn :unknown-keys :error :inline true :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:unknown-keys :error}"))))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn :typed-check :warn} (settings-of-file (file "{:stale-callers :warn}")))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :off} (settings-of-file (file "{:typed-check :off}"))))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline, :stale-callers, :typed-check$"
                         (error "{:strict true}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :literal-check must be one of :warn, :error, :off, got :fail$"
                         (error "{:literal-check :fail}")))
@@ -506,6 +507,8 @@
                         (error "{:unknown-keys :loud}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :stale-callers must be one of :reload, :warn, :off, got :quiet$"
                         (error "{:stale-callers :quiet}")))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: :typed-check must be one of :warn, :error, :off, got :strict$"
+                        (error "{:typed-check :strict}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :inline must be one of true, false, got \"no\"$"
                         (error "{:inline \"no\"}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: the settings must be a map, got \[:error\]$"
@@ -599,8 +602,8 @@
                               (defn-typed.core/defn-typed quiet-f {:a :int} -> :any a)]
                 '[quiet-f quiet-f--positional quiet-f-props]
                 (fn [] (is (nil? (compile-error '(quiet-f {:a 1 :zz 2}))))))))))
-     (testing "a bad :literal-check / :unknown-keys in defmeta fails the definition naming the allowed values"
-       (doseq [k [:literal-check :unknown-keys]]
+     (testing "a bad :literal-check / :unknown-keys / :typed-check in defmeta fails the definition naming the allowed values"
+       (doseq [k [:literal-check :unknown-keys :typed-check]]
          (is (= (str "defmeta f: " k " must be one of :warn, :error, :off, got :loud")
                 (try (pr-str (macroexpand-1 (list 'defn-typed.core/defmeta 'f {k :loud})))
                      (catch Exception e (ex-message (or (ex-cause e) e))))))))))
