@@ -182,7 +182,7 @@
 
 (deftest check-api
   (testing "check-ns = check-var over a namespace's registered vars and its vars carrying cases"
-    (is (= {`incremented 2 `padded 2}
+    (is (= {`incremented 2 `padded 2 `shorter 2}
            (into {} (map (juxt :var :cases)) (core/check-ns 'defn-typed.core-test)))))
   (testing "registered-vars lists what defmeta registered; undefined-metas names a defmeta nothing defined"
     (is (some #{#'padded} (core/registered-vars 'defn-typed.core-test)))

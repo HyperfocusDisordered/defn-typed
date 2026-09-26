@@ -21,6 +21,7 @@
    (`:stale-callers` in defn-typed.edn).
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
+   `defnt` = defn-typed under a short name.
    A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map
    `{:inout-tests [[[args…] expected] …]}`, keep [[args…] expected] pairs, (= expected (apply f args));
    registered cases win. Works in clj and cljs; this namespace never loads malli: `:malli/schema`
@@ -1183,6 +1184,14 @@
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
                    ~@signature-call)))))))))
+
+#?(:clj
+   (defmacro defnt
+     "defn-typed under a short name: (defnt name {key schema …} -> <out-schema> body…) is the
+      defn-typed macro called with the same form, so it expands to exactly what defn-typed does."
+     {:arglists (:arglists (meta #'defn-typed))}
+     [& args]
+     (apply @#'defn-typed &form &env args)))
 
 #?(:clj
    (defmacro defmeta

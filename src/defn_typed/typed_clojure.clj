@@ -11,7 +11,7 @@
    - `check-form!` checks one top-level form without evaluating it and returns its type errors
      as data, each marked whether it involves a defn-typed function."
   (:require [clojure.string :as str]
-            [defn-typed.core :refer [defn-typed defmeta schema-props walk-rows]]
+            [defn-typed.core :refer [defn-typed defnt defmeta schema-props walk-rows]]
             [malli.core :as m]
             [malli.instrument :as mi]
             [typed.clj.checker :as checker]
@@ -110,15 +110,15 @@
                      (some-> (resolve (symbol (namespace (symbol v)) base)) defn-typed-fn)))))))
 
 (defn- defn-typed-form?
-  "Whether form is a `(defn-typed …)` form of ns-sym."
+  "Whether form is a `(defn-typed …)` or `(defnt …)` form of ns-sym."
   [ns-sym form]
-  (and (seq? form) (= #'defn-typed (try (ns-resolve ns-sym (first form)) (catch Exception _ nil)))))
+  (and (seq? form) (contains? #{#'defn-typed #'defnt} (try (ns-resolve ns-sym (first form)) (catch Exception _ nil)))))
 
 (defn- labelled
   "{:message :kind} of the checker's message for an error in form of ns-sym: a call of a defn-typed
    function it could not apply (`Function <f> could not be applied…`, f resolving in ns-sym to a
    defn-typed function) = `input of <f>: ` before the message, :input; a `Type mismatch:` in a
-   `(defn-typed <f> …)` form = `output of <f>: `, :output; anything else = the message, nil."
+   `(defn-typed <f> …)` / `(defnt <f> …)` form = `output of <f>: `, :output; anything else = the message, nil."
   [ns-sym form message]
   (let [[_ applied] (re-find #"^Function (\S+) could not be applied" message)
         applied-var (when applied (try (ns-resolve ns-sym (symbol applied)) (catch Exception _ nil)))]
@@ -140,7 +140,7 @@
          = the checker's text, led by `input of <f>: ` when it could not apply the defn-typed
          function f to the call's map (`:kind :input`) or by `output of <f>: ` for a type mismatch
          in the defn-typed definition of f (`:kind :output`), `:kind` nil otherwise; `:defn-typed?`
-         true when the error is inside a `(defn-typed …)` form (its body) or its form calls a
+         true when the error is inside a `(defn-typed …)` / `(defnt …)` form (its body) or its form calls a
          defn-typed function. A checker crash (StackOverflowError on a very large form) is one
          error of its message."})
 
