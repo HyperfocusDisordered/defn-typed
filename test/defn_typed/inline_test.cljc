@@ -116,6 +116,8 @@
 
 (defn- literal-caller [] (padded {:a 1}))
 
+(defn- cart-caller [] (cart-total {:items [{:price 100} {:price 5 :qty 2}]}))
+
 ;; a cljs number literal is a double; in clj `1` is a long, which :double rejects
 #?(:cljs (defn- double-literal-caller [] (scaled {:x 1})))
 
@@ -193,6 +195,11 @@
   (testing "switch on: a fitting literal calls the positional fn, so a redefinition of the map fn is not seen; off: it is the map call through the var"
     (with-redefs [padded (constantly :redefined)]
       (is (= (if inline? [1 2 nil] :redefined) (literal-caller))))))
+
+(deftest nested-default-literal-call-site
+  (testing "switch on: a literal whose items leave a defaulted key out is filled at compile time and calls the positional fn; off: the map call through the var"
+    (with-redefs [cart-total (constantly :redefined)]
+      (is (= (if inline? 110 :redefined) (cart-caller))))))
 
 #?(:cljs
    (deftest cljs-number-literal-call-site

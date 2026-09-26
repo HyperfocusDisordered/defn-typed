@@ -3,6 +3,8 @@
    and what `defn-typed` and `defmeta` expand to, in cljs."
   (:require [cljs.test :refer [deftest is testing]]
             [defn-typed.core :as core :refer [defn-typed defmeta]]
+            [malli.core :as m]
+            [malli.error :as me]
             [malli.instrument :as mi]))
 
 (defn- summary [results]
@@ -92,6 +94,7 @@
             data (try (cart-total m) nil
                       (catch :default e (ex-data e)))]
         (is (= :malli.core/invalid-input (:type data)))
-        (is (= [[0 :items 0 :price]] (mapv :in (:errors (:data data)))))))
+        (is (= [":items 0 :price · should be an integer · got \"x\""]
+               (core/malli-reasons {:explain m/explain :error-message me/error-message} data)))))
     (finally
       (mi/unstrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]}))))
