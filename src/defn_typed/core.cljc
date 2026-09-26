@@ -668,6 +668,14 @@
                        (assoc-in [:macros fn-name] {:name (symbol (str ns-sym) (str fn-name)) :ns ns-sym :macro true}))))))))
 
 #?(:clj
+   (defn- plumbing
+     "form marked `^:typed.clojure/ignore`: Typed Clojure skips it and types it t/Any. Every
+      generated form that holds no user code carries it (the body lives in <name>--positional), so
+      a check sees the user's body and calls, never the expansion's wiring."
+     [form]
+     (vary-meta form assoc :typed.clojure/ignore true)))
+
+#?(:clj
    (defmacro defn-typed
      "(defn-typed name ^{table-props}? {key schema …} -> <out-schema> body…): a one-arity function of one map.
       The input = the map literal of its rows, one entry per line: `key schema`, or `key [props schema]`
@@ -771,10 +779,11 @@
                       (not cljs?) (assoc :inline-arities #{1}
                                          ;; the fallback is a host call on the var's value: no op
                                          ;; position, so it is never expanded again
-                                         :inline `(fn [arg#]
-                                                    (expand-call {:spec '~spec :arg arg# :cljs? false
-                                                                  :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
-                                                                  :file *file* :line (deref clojure.lang.Compiler/LINE)}))))]
+                                         :inline (plumbing
+                                                  `(fn [arg#]
+                                                     (expand-call {:spec '~spec :arg arg# :cljs? false
+                                                                   :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
+                                                                   :file *file* :line (deref clojure.lang.Compiler/LINE)})))))]
           (swap! pending-meta dissoc q)
           ;; cljs: a release build only (see install-cljs-expander!); a dev build keeps plain calls
           (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
@@ -782,11 +791,13 @@
                 body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))]
             (if-not malli-opts
               `(do
-                 (def ~props ~props-form)
+                 ~(plumbing `(def ~props ~props-form))
                  ;; the body calls name before its defn: a recursive call, name passed as a value
                  ~@(when positional? [`(declare ~fn-name) body-defn])
-                 (defn ~fn-name ~attrs [~m]
-                   ~call))
+                 ;; positional: name only binds the rows and calls the body; else the body is here
+                 ~(cond-> `(defn ~fn-name ~attrs [~m]
+                             ~call)
+                    positional? plumbing))
               ;; :malli-in-prod: name checks the map and the result around the body, which lives in
               ;; <name>--positional or <name>--body (a recur there recurs with the map, unchecked)
               (let [slot (symbol (str fn-name "--malli-in-prod"))
@@ -795,18 +806,19 @@
                     check? (gensym "check")
                     result (gensym "result")]
                 `(do
-                   (def ~props ~props-form)
-                   (def ~(with-meta slot {:no-doc true})
-                     (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts}))
+                   ~(plumbing `(def ~props ~props-form))
+                   ~(plumbing `(def ~(with-meta slot {:no-doc true})
+                                 (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts})))
                    (declare ~fn-name)
                    ~(or body-defn `(defn ~body-fn {:no-doc true} [~m] ~call))
-                   (defn ~fn-name ~attrs [~m]
-                     (let [~checker (malli-checker ~slot)
-                           ~check? (malli-check? ~checker)]
-                       (when ~check? (malli-check! ~checker :input ~m))
-                       (let [~result ~(if positional? call `(~body-fn ~m))]
-                         (when ~check? (malli-check! ~checker :output ~result))
-                         ~result))))))))))))
+                   ~(plumbing
+                     `(defn ~fn-name ~attrs [~m]
+                        (let [~checker (malli-checker ~slot)
+                              ~check? (malli-check? ~checker)]
+                          (when ~check? (malli-check! ~checker :input ~m))
+                          (let [~result ~(if positional? call `(~body-fn ~m))]
+                            (when ~check? (malli-check! ~checker :output ~result))
+                            ~result)))))))))))))
 
 #?(:clj
    (defmacro defmeta
@@ -834,9 +846,9 @@
          `(do
             (declare ~fn-name)
             ~@(when (seq other)
-                [(dev `(register-meta! (var ~fn-name) ~other))])
+                [(plumbing (dev `(register-meta! (var ~fn-name) ~other)))])
             ~@(when (contains? m :inout-tests)
-                [(dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m))))]))))))
+                [(plumbing (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))))]))))))
 
 (declare with-defaults)
 
