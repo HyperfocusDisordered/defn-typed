@@ -1,7 +1,7 @@
 (ns defn-typed.inline-test
   "Call sites of defn-typed functions: every result below is the same whether the call compiles to
-   the map call (the switch off: dev, REPL, tests) or to the positional call (on: clj
-   `-J-Ddefn-typed.inline=true`, cljs `:advanced`). CI runs this namespace both ways."
+   the map call (the switch off: clj `-J-Ddefn-typed.inline=false`, cljs dev) or to the positional
+   call (on: clj by default, cljs `:advanced`). CI runs this namespace both ways."
   (:require [clojure.test :refer [deftest is testing]]
             [defn-typed.core :refer [defn-typed]]
             ;; the value check of a literal runs when malli is loaded, as a dev/test loader loads it
@@ -9,7 +9,7 @@
 
 (def inline?
   "Whether this build compiled with the switch on."
-  #?(:clj (= "true" (System/getProperty "defn-typed.inline"))
+  #?(:clj (not= "false" (System/getProperty "defn-typed.inline"))
      :cljs (not ^boolean goog.DEBUG)))
 
 (defn-typed padded {
@@ -204,6 +204,57 @@
      (testing "a key beyond the rows, or one that is not a keyword literal: the map call, switch on or off"
        (is (= ['.invoke `padded '{:a 1 :zz 2}] (vec ((:inline (meta #'padded)) '{:a 1 :zz 2}))))
        (is (= ['.invoke `padded '{k 1}] (vec ((:inline (meta #'padded)) '{k 1})))))))
+
+#?(:clj
+   (defn- with-inline-property
+     "Calls f with the JVM property defn-typed.inline set to value (nil = unset), restored after."
+     [value f]
+     (let [before (System/getProperty "defn-typed.inline")
+           put! #(if % (System/setProperty "defn-typed.inline" %) (System/clearProperty "defn-typed.inline"))]
+       (put! value)
+       (try (f) (finally (put! before))))))
+
+#?(:clj
+   (deftest literal-is-positional-by-default
+     (testing "property unset: a fitting literal compiles to the positional call; `false`: the map call through the var"
+       (is (= `padded--positional
+              (first (last (with-inline-property nil #((:inline (meta #'padded)) '{:a 1}))))))
+       (is (= ['.invoke `padded '{:a 1}]
+              (vec (with-inline-property "false" #((:inline (meta #'padded)) '{:a 1}))))))))
+
+#?(:clj
+   (deftest inline-under-instrumentation-warns-once
+     (testing "a literal compiled inline while malli.instrument is loaded prints one stderr line per JVM; `false` prints none"
+       (require 'malli.instrument)
+       (let [warned @#'defn-typed.core/instrumentation-warned
+             before @warned
+             err (java.io.StringWriter.)]
+         (try
+           (reset! warned false)
+           (binding [*err* err]
+             (with-inline-property "false" #((:inline (meta #'padded)) '{:a 1}))
+             (is (= "" (str err)))
+             (with-inline-property nil #(do ((:inline (meta #'padded)) '{:a 1})
+                                            ((:inline (meta #'padded)) '{:a 2}))))
+           (is (= (str "defn-typed: literal calls compile to positional calls, instrumentation will not check them"
+                       " — set -Ddefn-typed.inline=false in your dev/test alias\n")
+                  (str err)))
+           (finally (reset! warned before)))))))
+
+#?(:clj
+   (deftest redefinition-reaches-compiled-caller
+     (testing "a caller compiled before a REPL redefinition of the function's body runs the new body, switch on or off"
+       (binding [*ns* (the-ns 'defn-typed.inline-test)]
+         (eval '(defn-typed.core/defn-typed redefined {:a :int} -> :any [:old a]))
+         (eval '(defn redefined-caller [] (redefined {:a 1})))
+         (let [first-result (eval '(redefined-caller))]
+           (eval '(defn-typed.core/defn-typed redefined {:a :int} -> :any [:new a]))
+           (try
+             (is (= [:old 1] first-result))
+             (is (= [:new 1] (eval '(redefined-caller))))
+             (finally
+               (doseq [s '[redefined redefined--positional redefined-props redefined-caller]]
+                 (ns-unmap 'defn-typed.inline-test s)))))))))
 
 #?(:clj
    (defn- compile-warnings

@@ -25,7 +25,7 @@ jobs:
           key: ${{ github.job }}-deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'shadow-cljs.edn') }}
           restore-keys: ${{ github.job }}-deps-${{ runner.os }}-
       - run: clojure -M:test
-      - run: clojure -J-Ddefn-typed.inline=true -M:test
+      - run: clojure -J-Ddefn-typed.inline=false -M:test
 
   cljs:
     runs-on: ubuntu-latest

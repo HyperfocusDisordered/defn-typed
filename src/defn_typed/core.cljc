@@ -371,12 +371,27 @@
 
 #?(:clj
    (defn- inline-on?
-     "The zero-cost switch: clj — JVM system property `defn-typed.inline=true`; cljs — the
-      compiler's `:optimizations` is `:advanced` (a release build)."
+     "Whether a fitting literal call compiles to the positional call: clj — unless the JVM system
+      property `defn-typed.inline` is `false` (a dev/test alias sets it, so the call goes through
+      the instrumented var); cljs — the compiler's `:optimizations` is `:advanced` (a release build)."
      [cljs?]
      (if cljs?
        (= :advanced (some-> (resolve 'cljs.env/*compiler*) deref deref :options :optimizations))
-       (= "true" (System/getProperty "defn-typed.inline")))))
+       (not= "false" (System/getProperty "defn-typed.inline")))))
+
+#?(:clj
+   (defonce ^:private instrumentation-warned
+     (atom false)))
+
+#?(:clj
+   (defn- warn-if-instrumented!
+     "Prints one stderr line per JVM when a literal call compiles to the positional call while
+      malli.instrument is loaded: instrumentation wraps the var, which that call skips."
+     []
+     (when (and (find-ns 'malli.instrument) (compare-and-set! instrumentation-warned false true))
+       (binding [*out* *err*]
+         (println (str "defn-typed: literal calls compile to positional calls, instrumentation will not check them"
+                       " — set -Ddefn-typed.inline=false in your dev/test alias"))))))
 
 #?(:clj
    (defn- malli-check-fns
@@ -498,7 +513,8 @@
            (if (and inline? (not mismatches) (:positional spec)
                     ;; a key beyond the rows (open map) or not a keyword literal: the map call
                     (every? (set (map :key (:rows spec))) (keys arg)))
-             (literal-call spec arg)
+             (do (when-not cljs? (warn-if-instrumented!))
+                 (literal-call spec arg))
              fallback)))
        (catch Exception _ fallback))))
 
