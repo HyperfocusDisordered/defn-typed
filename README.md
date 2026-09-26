@@ -384,8 +384,8 @@ What is checked where:
   (`{:price 0}` against `[:int {:min 1}]`), unknown keys of a closed map (`^{:closed true}`), and
   the output. clj-kondo's types carry no ranges and read every map as open.
 - **Compile** (the macro, at every map-literal call; cljs: release builds, see
-  [Compile-time literal checks](#compile-time-literal-checks)): unknown keys of a closed map,
-  missing keys, and values that are data against their row schema, ranges included.
+  [Compile-time literal checks](#compile-time-literal-checks)): unknown keys, the map open or
+  closed, missing keys, and values that are data against their row schema, ranges included.
 - **Release**: nothing, except the functions you opt in (see
   [malli in production](#malli-in-production)). The types live in `.clj-kondo`, instrumentation
   only in dev/test.
@@ -411,7 +411,8 @@ Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent 
 - **Output** = any malli schema after `->`.
 - **Body**: no argument vector — every row key is already a local.
 - **Table props** go on the map as reader metadata; `^{:as sym}` binds the whole defaults-filled
-  map (keys beyond the rows included — `[:map …]` is open) to `sym`:
+  map (a real map's keys beyond the rows included — `[:map …]` is open; a literal call flags
+  them as unknown keys) to `sym`:
 
   ```clojure
   (defn-typed with-total ^{:closed true :as row} {
@@ -501,8 +502,8 @@ walking the schema at every call: 814 ns).
 
 ### Compile-time literal checks
 
-In Clojure, with the switch on or off, a map-literal call is checked where it compiles: an unknown key (of a
-closed map, `^{:closed true}`; `[:map …]` is open), a missing required key (not judged when a key
+In Clojure, with the switch on or off, a map-literal call is checked where it compiles: an unknown key (any key
+that is not a row, the map open or closed), a missing required key (not judged when a key
 is not a keyword literal, `{k 1}`), and each value that is data (a number, string, keyword, boolean, nil, or a
 literal collection of those) against its row schema, ranges included. A map literal whose row is a
 `[:map …]` (or `[:maybe [:map …]]`) is walked by the same rules, each finding led by its key path
