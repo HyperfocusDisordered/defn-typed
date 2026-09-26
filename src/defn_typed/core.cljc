@@ -443,9 +443,20 @@
 
 #?(:clj
    (def ^:private setting-values
-     "The settings of defn-typed.edn and their allowed values, the first one the default."
-     {:literal-check [:warn :error]
+     "The settings of defn-typed.edn and their allowed values, the first one the default.
+      `:literal-check` and `:unknown-keys` also take a per-function value in `defmeta`."
+     {:literal-check [:warn :error :off]
+      :unknown-keys [:warn :error :off]
       :inline [true false]}))
+
+#?(:clj
+   (defn- setting-value-problem
+     "Why v cannot be the value of the setting k (`<k> must be one of <allowed>, got <v>`), else nil;
+      k is one of setting-values."
+     [k v]
+     (let [allowed (get setting-values k)]
+       (when (not-any? #(= v %) allowed)
+         (str (pr-str k) " must be one of " (apply str (interpose ", " (map pr-str allowed))) ", got " (pr-str v))))))
 
 #?(:clj
    (defn settings-file
@@ -458,27 +469,24 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:literal-check :warn :inline true}`, merged with the file's map. Throws, naming the file,
-      when its content is not a map, holds a key other than those two, or a value outside the key's
-      allowed ones."
+      `{:literal-check :warn :unknown-keys :warn :inline true}`, merged with the file's map. Throws,
+      naming the file, when its content is not a map, holds a key other than those, or a value
+      outside the key's allowed ones."
      [^java.io.File file]
      (let [where (str "defn-typed " (some-> file .getPath) ": ")
            m (if file (clojure.edn/read-string (slurp file)) {})]
        (when-not (map? m)
          (throw (ex-info (str where "the settings must be a map, got " (pr-str m)) {:file file})))
        (doseq [[k v] m]
-         (let [allowed (get setting-values k)]
-           (cond
-             (nil? allowed)
-             (throw (ex-info (str where "unknown key " (pr-str k) " — the keys are "
-                                  (apply str (interpose ", " (keys setting-values))))
-                             {:file file :key k}))
-             (not-any? #(= v %) allowed)
-             (throw (ex-info (str where (pr-str k) " must be one of "
-                                  (apply str (interpose ", " (map pr-str allowed))) ", got " (pr-str v))
-                             {:file file :key k}))
-             ;; a known key with an allowed value: merged below
-             :else nil)))
+         (cond
+           (not (contains? setting-values k))
+           (throw (ex-info (str where "unknown key " (pr-str k) " — the keys are "
+                                (apply str (interpose ", " (keys setting-values))))
+                           {:file file :key k}))
+           (setting-value-problem k v)
+           (throw (ex-info (str where (setting-value-problem k v)) {:file file :key k}))
+           ;; a known key with an allowed value: merged below
+           :else nil))
        (merge (into {} (map (fn [[k vs]] [k (first vs)])) setting-values) m))))
 
 #?(:clj
@@ -489,9 +497,10 @@
 
 #?(:clj
    (defn- setting
-     "A setting's value: the JVM system property `defn-typed.<key>` when set (`defn-typed.inline`:
-      anything but `false` is on; `defn-typed.literal-check`: `warn` or `error`), else the
-      project's defn-typed.edn, else the default."
+     "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
+      (`defn-typed.inline`: anything but `false` is on; `defn-typed.literal-check` and
+      `defn-typed.unknown-keys`: `warn`, `error` or `off`), else the project's defn-typed.edn, else
+      the default. A function's own `:literal-check` / `:unknown-keys` in its defmeta wins over it."
      [k]
      (let [property (System/getProperty (str "defn-typed." (name k)))]
        (cond
@@ -775,12 +784,14 @@
      "A call site of a defn-typed function, as its call-site expander (clj `:inline`, cljs a macro
       of the same name) compiles it: a map-literal argument is checked (literal-mismatches) and a
       mismatch prints one `WARNING defn-typed <file>:<line>: (f …) <findings>` to stderr, or with
-      the setting `:literal-check :error` throws an ex-info of that text without `WARNING ` (the
-      compile fails); with the switch on (inline-on?) a literal that fits becomes the positional
-      call; everything else = `fallback`, the normal call of the var. Throws only that mismatch
-      and a bad setting."
+      `:literal-check :error` throws an ex-info of that text without `WARNING ` (the compile
+      fails), or with `:off` does neither (the function's own `:literal-check`, the spec's, wins
+      over the project setting); with the switch on (inline-on?) a literal that fits becomes the
+      positional call; everything else = `fallback`, the normal call of the var. The compiled call
+      is the same whichever the setting. Throws only that mismatch and a bad setting."
      [{:keys [spec arg fallback cljs? file line]}]
-     (let [literal-check (setting :literal-check)] ; a bad setting fails every call site
+     (let [literal-check (let [project (setting :literal-check)] ; a bad setting fails every call site
+                           (or (:literal-check spec) project))]
        (try
          (if-not (map? arg)
            fallback
@@ -791,7 +802,7 @@
                                #(when props (peek (nth props (:index %))))))
                  mismatches (seq (literal-mismatches {:spec spec :arg arg :schema-of schema-of
                                                       :malli (malli-check-fns cljs?) :cljs? cljs?}))]
-             (when mismatches
+             (when (and mismatches (not= :off literal-check))
                (let [text (str "defn-typed " file ":" line ": (" (name (:name spec)) " …) "
                                (apply str (interpose "; " mismatches)))]
                  (if (= :error literal-check)
@@ -941,6 +952,8 @@
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
               spec (cond-> {:name q :props q-props
                             :rows (mapv #(select-keys % [:key :index :type :absent :required :runtime]) rows)}
+                     ;; the function's own :literal-check wins over the project's at its call sites
+                     (:literal-check meta-keys) (assoc :literal-check (:literal-check meta-keys))
                      ;; a :malli-in-prod call must pass the check in name: never the positional call
                      (and positional? (not malli-opts))
                      (assoc :positional (qualified &env positional)))
@@ -1000,7 +1013,8 @@
       var metadata in clj and cljs. Expands to (declare name) + the registration, so it runs before
       the var is defined; the keys other than the cases are also recorded in `registry` as the var's
       `:meta` (register-meta!), which is where a plain defn below keeps them. In cljs all of it is
-      under goog.DEBUG, like the cases."
+      under goog.DEBUG, like the cases. `:literal-check` and `:unknown-keys` (`:warn`, `:error` or
+      `:off`) are the function's own settings, winning over the project's; a bad value fails here."
      [fn-name m]
      (let [fail! #(throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name}))
            debug (with-meta 'goog.DEBUG {:tag 'boolean})
@@ -1011,6 +1025,10 @@
          (fail! (str "the metadata must be a map literal, got " (pr-str m))))
        (when-let [problem (and (contains? m :malli-in-prod) (malli-in-prod-opts-problem (:malli-in-prod m)))]
          (fail! (str ":malli-in-prod is " problem)))
+       (doseq [k [:literal-check :unknown-keys]
+               :let [problem (and (contains? m k) (setting-value-problem k (get m k)))]
+               :when problem]
+         (fail! problem))
        (swap! pending-meta assoc (qualified &env fn-name) m)
        (let [other (dissoc m :inout-tests)
              q (qualified &env fn-name)]
