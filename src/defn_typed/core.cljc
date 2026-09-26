@@ -28,7 +28,9 @@
      and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
   #?(:clj (:require [clojure.edn]
-                   [clojure.test :as test])
+                   [clojure.string]
+                   [clojure.test :as test]
+                   [clojure.walk])
      :cljs (:require-macros [defn-typed.core])))
 
 (defn var-name [v] (symbol v))
@@ -493,7 +495,8 @@
       `:literal-check` and `:unknown-keys` also take a per-function value in `defmeta`."
      {:literal-check [:warn :error :off]
       :unknown-keys [:warn :error :off]
-      :inline [true false]}))
+      :inline [true false]
+      :stale-callers [:reload :warn :off]}))
 
 #?(:clj
    (defn- setting-value-problem
@@ -515,7 +518,7 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:literal-check :warn :unknown-keys :warn :inline true}`, merged with the file's map. Throws,
+      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload}`, merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
       outside the key's allowed ones."
      [^java.io.File file]
@@ -545,7 +548,8 @@
    (defn- setting
      "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
       (`defn-typed.inline`: anything but `false` is on; `defn-typed.literal-check` and
-      `defn-typed.unknown-keys`: `warn`, `error` or `off`), else the project's defn-typed.edn, else
+      `defn-typed.unknown-keys`: `warn`, `error` or `off`; `defn-typed.stale-callers`: `reload`,
+      `warn` or `off`), else the project's defn-typed.edn, else
       the default. A function's own `:literal-check` / `:unknown-keys` in its defmeta wins over it."
      [k]
      (let [property (System/getProperty (str "defn-typed." (name k)))]
@@ -581,6 +585,22 @@
        (binding [*out* *err*]
          (println (str "defn-typed: literal calls compile to positional calls, instrumentation will not check them"
                        " — set -Ddefn-typed.inline=false in your dev/test alias"))))))
+
+#?(:clj
+   (defonce ^{:doc "`{<fn> #{<caller ns> …}}`: for each defn-typed function (qualified symbol), the
+      namespaces whose file holds a literal call compiled to its positional call, in this process.
+      signature! drops a namespace from every entry before it reloads it, and the reload records
+      the calls it compiles again."}
+     inlined-callers
+     (atom {})))
+
+#?(:clj
+   (defn- record-inlined-caller!
+     "Records *ns* as a caller of f (a qualified symbol) in inlined-callers when the positional call
+      compiles from a file: a call typed into a REPL (file `NO_SOURCE_PATH`) has no file to reload."
+     [f file]
+     (when (and file (not= "NO_SOURCE_PATH" file))
+       (swap! inlined-callers update f (fnil conj #{}) (ns-name *ns*)))))
 
 #?(:clj
    (defn- malli-check-fns
@@ -866,12 +886,89 @@
                       ;; a key that is not a keyword literal (unjudged, may be any key): the map call
                       (every? (set (map :key (:rows spec))) (keys arg)))
                (if-let [call (literal-call spec arg schema-of)]
-                 (do (when-not cljs? (warn-if-instrumented!))
+                 (do (when-not cljs?
+                       (warn-if-instrumented!)
+                       (record-inlined-caller! (:name spec) file))
                      call)
                  fallback)
                fallback)))
          (catch Exception e
            (if (::literal-mismatches (ex-data e)) (throw e) fallback))))))
+
+#?(:clj
+   (defn- signature
+     "What a literal call compiled to the positional call depends on, as one string: the spec the
+      call-site expander closes over (expand-call) — the positional fn, each row's key and place,
+      its type as written (the literal check judges by it; a runtime row's literal-fill fills by
+      it), its absent form (the default written into the call), `:required` / `:runtime`, and the
+      function's own `:literal-check`. Every generated symbol (`p1__12#`, `x__12__auto__`, `G__12`)
+      is written `<stem>__#` and a regex prints as its source, so the same source gives the same
+      string on every read."
+     [spec]
+     (pr-str (clojure.walk/postwalk
+              (fn [x]
+                (if-let [[_ stem] (and (symbol? x) (re-matches #"(.*?)__\d+(?:__auto__)?#?" (name x)))]
+                  (symbol (namespace x) (str stem "__#"))
+                  x))
+              spec))))
+
+#?(:clj
+   (defonce ^:private signatures
+     ;; {<fn> <signature>}: the signature of each defn-typed function's latest definition
+     (atom {})))
+
+#?(:clj
+   (defn- innermost-message
+     "e's message, followed by its innermost cause's when that differs (a compile error's cause
+      holds the reason)."
+     [^Throwable e]
+     (let [root (last (take-while some? (iterate ex-cause e)))]
+       (if (= (ex-message e) (ex-message root))
+         (str (ex-message e))
+         (str (ex-message e) " — " (ex-message root))))))
+
+#?(:clj
+   (defn- reload-caller!
+     "Reloads the namespace caller from its file, first dropping it from every inlined-callers entry
+      (the reload records the positional calls it compiles). A reload that throws prints
+      `defn-typed: reloading <caller> failed: <message>` and returns false; true otherwise."
+     [caller]
+     (swap! inlined-callers #(reduce-kv (fn [m f callers] (assoc m f (disj callers caller))) {} %))
+     (try
+       (require caller :reload)
+       true
+       (catch Throwable e
+         (print-err! (str "defn-typed: reloading " caller " failed: " (innermost-message e)))
+         false))))
+
+#?(:clj
+   (defn signature!
+     "Called by each clj defn-typed definition right after its defn, with its var and signature.
+      When an earlier definition of v had another signature, the namespaces holding a literal call
+      compiled to its old positional call (inlined-callers) — other than v's own, which is the one
+      loading, and one being loaded right now (it compiles against the new definition) — are stale,
+      and the `:stale-callers` setting says what happens: `:reload` reloads each from its file
+      (reload-caller!; its literal calls are judged again, so an incompatible one shows its
+      warning) and prints `defn-typed: <f> changed its signature, reloaded callers: <ns>, …`;
+      `:warn` prints `defn-typed: <f> changed its signature; callers compiled with the old one:
+      <ns>, … — reload them`; `:off` does neither. Returns v."
+     [v signature]
+     (let [f (symbol v)
+           previous (get (first (swap-vals! signatures assoc f signature)) f)]
+       (when (and previous (not= previous signature))
+         (let [loading (set @#'clojure.core/*pending-paths*)
+               callers (->> (disj (get @inlined-callers f) (symbol (namespace f)))
+                            (remove #(loading (#'clojure.core/root-resource %)))
+                            sort)]
+           (when (seq callers)
+             (case (setting :stale-callers)
+               :reload (when-let [reloaded (seq (doall (filter reload-caller! callers)))]
+                         (print-err! (str "defn-typed: " f " changed its signature, reloaded callers: "
+                                          (clojure.string/join ", " reloaded))))
+               :warn (print-err! (str "defn-typed: " f " changed its signature; callers compiled with the old one: "
+                                      (clojure.string/join ", " callers) " — reload them"))
+               :off nil))))
+       v)))
 
 #?(:clj
    (defn- install-cljs-expander!
@@ -1042,7 +1139,10 @@
           ;; cljs: a release build only (see install-cljs-expander!); a dev build keeps plain calls
           (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
           (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
-                body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))]
+                body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))
+                ;; clj: after the defn, callers compiled against another signature are stale (cljs:
+                ;; shadow-cljs recompiles the namespaces that depend on a changed one)
+                signature-call (when-not cljs? [(plumbing `(signature! (var ~fn-name) ~(signature spec)))])]
             (if-not malli-opts
               `(do
                  ~(plumbing `(def ~props ~props-form))
@@ -1052,7 +1152,8 @@
                  ~(cond-> `(defn ~fn-name ~attrs [~m]
                              ~@(when key-check [key-check])
                              ~call)
-                    positional? plumbing))
+                    positional? plumbing)
+                 ~@signature-call)
               ;; :malli-in-prod: name checks the map and the result around the body, which lives in
               ;; <name>--positional or <name>--body (a recur there recurs with the map, unchecked)
               (let [slot (symbol (str fn-name "--malli-in-prod"))
@@ -1074,7 +1175,8 @@
                           (when ~check? (malli-check! ~checker :input ~m))
                           (let [~result ~(if positional? call `(~body-fn ~m))]
                             (when ~check? (malli-check! ~checker :output ~result))
-                            ~result)))))))))))))
+                            ~result))))
+                   ~@signature-call)))))))))
 
 #?(:clj
    (defmacro defmeta
