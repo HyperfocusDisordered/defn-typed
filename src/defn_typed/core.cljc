@@ -15,8 +15,10 @@
    its map for the defn-typed below, which puts :doc and the other keys into f's attr-map.
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]),
    (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]
-   :arglists '([{:keys [k]}])} [m] (let [{:keys [k] :or {k 1}} m] (f--positional k))); every call
-   site goes through expand-call.
+   :arglists '([{:keys [k]}])} [m] (let [{:keys [k] :or {k 1}} m] (f--positional k))) and, in clj,
+   (signature! #'f \"…\"); every call site goes through expand-call, and a redefinition with
+   another signature reloads the namespaces whose calls compiled to the old positional call
+   (`:stale-callers` in defn-typed.edn).
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    A defmeta case passes iff (= expected (f in)). The legacy sources, `tests` and an attr-map
@@ -1023,7 +1025,8 @@
       `(defn <name>--positional [k…] body…)` (the rows in entry order) and
       `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>] :arglists '([{:keys [k…]}])} [m]
       (let [{:keys [k…] :or {k default}} m] (<name>--positional k…)))`, so everything that reads defn
-      and :malli/schema sees a plain defn, and doc shows the rows as its arglist.
+      and :malli/schema sees a plain defn, and doc shows the rows as its arglist; clj then calls
+      `(signature! #'name \"<signature>\")`, which reloads the callers compiled against another one.
       A default = `:default` in the row type's own props (`:qty [:int {:default 1}]`), read at
       compile time; a row whose defaults only the evaluated schema shows (runtime-type?) is bound
       through row-value. Instrumentation checks the call

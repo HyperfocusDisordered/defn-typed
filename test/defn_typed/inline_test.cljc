@@ -491,18 +491,21 @@
          (let [file (fn [content] (let [root (settings-tree {"defn-typed.edn" content})] (java.io.File. root "defn-typed.edn")))
                error (fn [content] (try (settings-of-file (file content)) nil
                                         (catch clojure.lang.ExceptionInfo e (ex-message e))))]
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true} (settings-of-file nil)))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true} (settings-of-file (file "{}"))))
-           (is (= {:literal-check :error :unknown-keys :warn :inline true} (settings-of-file (file "{:literal-check :error}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline false} (settings-of-file (file "{:literal-check :warn :inline false}"))))
-           (is (= {:literal-check :off :unknown-keys :off :inline true} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
-           (is (= {:literal-check :warn :unknown-keys :error :inline true} (settings-of-file (file "{:unknown-keys :error}"))))
-           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline$"
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload} (settings-of-file nil)))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload} (settings-of-file (file "{}"))))
+           (is (= {:literal-check :error :unknown-keys :warn :inline true :stale-callers :reload} (settings-of-file (file "{:literal-check :error}"))))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline false :stale-callers :reload} (settings-of-file (file "{:literal-check :warn :inline false}"))))
+           (is (= {:literal-check :off :unknown-keys :off :inline true :stale-callers :reload} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
+           (is (= {:literal-check :warn :unknown-keys :error :inline true :stale-callers :reload} (settings-of-file (file "{:unknown-keys :error}"))))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn} (settings-of-file (file "{:stale-callers :warn}"))))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline, :stale-callers$"
                         (error "{:strict true}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :literal-check must be one of :warn, :error, :off, got :fail$"
                         (error "{:literal-check :fail}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :unknown-keys must be one of :warn, :error, :off, got :loud$"
                         (error "{:unknown-keys :loud}")))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: :stale-callers must be one of :reload, :warn, :off, got :quiet$"
+                        (error "{:stale-callers :quiet}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :inline must be one of true, false, got \"no\"$"
                         (error "{:inline \"no\"}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: the settings must be a map, got \[:error\]$"

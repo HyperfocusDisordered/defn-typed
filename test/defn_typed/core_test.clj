@@ -54,11 +54,11 @@
   (testing "the arglist is the rows as a destructuring map, so doc shows the inputs; a qualified key reads as its binding"
     (is (str/includes? (with-out-str (clojure.repl/doc padded)) "([{:keys [a b]}])"))
     (is (= ''([{:keys [a x/b]}])
-           (:arglists (nth (last (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int :x/b :int} -> :any a))) 2)))))
+           (:arglists (nth (nth (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int :x/b :int} -> :any a)) 4) 2)))))
   (testing "a map without metadata turns into a bare [:map …] in entry order; `key [props schema]` is a row with props; every row key is a local, a qualified key by its name"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int :x/b [{:optional true} :int]} -> :any [a b]))]
       (is (= '(def f-props [:map [:a :int] [:x/b {:optional true} :int]]) (second expansion)))
-      (is (= '{:keys [a x/b]} (first (second (last (last expansion))))))))
+      (is (= '{:keys [a x/b]} (first (second (last (nth expansion 4))))))))
   (testing "a row whose type carries :default gets {:optional true} (nested maps too); `key [{:optional true} schema]` stays as written"
     (is (= '(def f-props [:map [:a {:optional true} [:int {:min 1 :default 1}]]
                           [:c {:optional true} [:maybe :int]]
@@ -226,9 +226,10 @@
            (tree-seq coll? seq form)))
 
 (deftest release-form
-  (testing "defn-typed expands to (def <name>-props …) + (declare <name>) + the positional defn holding the body + a plain clojure.core/defn whose :malli/schema is attr-map data: no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
+  (testing "defn-typed expands to (def <name>-props …) + (declare <name>) + the positional defn holding the body + a plain clojure.core/defn whose :malli/schema is attr-map data + (signature! #'<name> …): no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int} -> :int a))]
-      (is (= ['do 'def 'clojure.core/declare 'clojure.core/defn 'clojure.core/defn] (cons (first expansion) (map first (rest expansion)))))
+      (is (= ['do 'def 'clojure.core/declare 'clojure.core/defn 'clojure.core/defn 'defn-typed.core/signature!] (cons (first expansion) (map first (rest expansion)))))
+      (is (= '(var f) (second (nth expansion 5))))
       (is (= '(clojure.core/declare f) (nth expansion 2)))
       (is (= '(clojure.core/defn f--positional {:no-doc true} [a] a) (nth expansion 3)))
       (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 4) 2))))
