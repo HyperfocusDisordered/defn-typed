@@ -781,9 +781,10 @@
 
 #?(:clj
    (defn- literal-call
-     "`(let [g v …] (positional …))` for a map-literal argument whose keys are all rows and that
-      holds every required row: the values bound in the literal's own order (the order the map
-      call would evaluate them in), an absent row given its default form (nil when optional). A
+     "`(positional …)` for a map-literal argument whose keys are all rows and that holds every
+      required row, an absent row given its default form (nil when optional): the values in place
+      when each is a symbol or data (constant-form?), else `(let [g v …] (positional …))`, the
+      values bound in the literal's own order (the order the map call would evaluate them in). A
       row read at call time (`:runtime`) takes its value with the defaults inside filled at compile
       time (literal-fill, against `(schema-of row)`); nil when one cannot be (the map call fills
       it)."
@@ -796,7 +797,13 @@
                                          v)])))
                         arg)
            locals (into {} (map (fn [k] [k (gensym (str (name k) "__"))])) (keys arg))]
-       (when-not (some #(= ::unfilled (second %)) values)
+       (cond
+         (some #(= ::unfilled (second %)) values) nil
+         ;; no value can have effects: the positional call itself, the values in place
+         (every? (fn [[_ v]] (or (symbol? v) (constant-form? v))) values)
+         (let [value-of (into {} values)]
+           `(~positional ~@(map #(get value-of (:key %) (:absent %)) rows)))
+         :else
          `(let [~@(mapcat (fn [[k v]] [(locals k) v]) values)]
             (~positional ~@(map #(get locals (:key %) (:absent %)) rows)))))))
 
