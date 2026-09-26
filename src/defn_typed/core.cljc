@@ -512,34 +512,79 @@
          (str "does not match " (pr-str source))))))
 
 #?(:clj
-   (defn- literal-mismatches
-     "Why a map-literal argument does not fit the rows, one text per finding: an unknown key (a
-      closed input map only: `[:map …]` is open), a missing required key (not judged when a key is
-      not a keyword literal: `{k 1}` may hold any key), a constant value (data, see constant-form?) its row schema rejects
-      (mismatch-reason). A row whose schema cannot be evaluated here (clj: the
-      evaluated props; cljs: the source form when it is data) skips the value check. JVM malli
-      judges a cljs literal as JS numbers (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
-     [{:keys [spec arg schema-of malli cljs?]}]
-     (let [row-of (into {} (map (juxt :key identity)) (:rows spec))]
+   (defn- map-schema
+     "The `[:map …]` schema a map literal is judged against: schema itself, or the one inside
+      `[:maybe …]`; nil for any other schema."
+     [schema]
+     (when (vector? schema)
+       (case (first schema)
+         :map schema
+         :maybe (map-schema (peek schema))
+         ;; any other schema: malli judges the value whole
+         nil))))
+
+#?(:clj
+   (declare ^:private map-literal-mismatches))
+
+#?(:clj
+   (defn- value-mismatches
+     "Why the literal value at path does not fit schema, one text per finding: a map literal
+      against a `[:map …]` (map-schema) → the findings inside it (map-literal-mismatches); other
+      data (constant-form?) → `<path> <value> — <reason>` (mismatch-reason) when malli is loaded;
+      a symbol, a call, or no schema → none. JVM malli judges a cljs literal as JS numbers
+      (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
+     [{:keys [path value schema source malli cljs?]}]
+     (let [nested (map-schema schema)]
+       (cond
+         (and nested (map? value))
+         (map-literal-mismatches {:path path :m value :malli malli :cljs? cljs?
+                                  :closed (true? (:closed (schema-props nested)))
+                                  :rows (for [entry (rest nested) :when (vector? entry)
+                                              :let [[k entry-props type] (row-parts entry)]]
+                                          {:key k :required (not (:optional entry-props)) :schema type :source type})})
+
+         (and malli (some? schema) (constant-form? value))
+         (when-let [errors (try (seq (literal-errors {:malli malli :schema schema :value value :cljs? cljs?}))
+                                (catch Exception _ nil))]
+           [(str (path-text path) " " (pr-str value) " — "
+                 (mismatch-reason {:malli malli :errors errors :source source}))])
+
+         ;; not data, no schema to judge by, or malli not loaded: not judged here
+         :else nil))))
+
+#?(:clj
+   (defn- map-literal-mismatches
+     "Why the map literal m at path does not fit rows (`{:key :required :schema :source}`), one
+      text per finding led by the key's path (`:order :price`): an unknown key (closed only:
+      `[:map …]` is open), a missing required key (not judged when a key is not a keyword literal:
+      `{k 1}` may hold any key), then each value's own (value-mismatches)."
+     [{:keys [path m rows closed malli cljs?]}]
+     (let [row-of (into {} (map (juxt :key identity)) rows)
+           at #(path-text (conj path %))]
        (concat
-        (when (:closed spec)
-          (for [k (keys arg) :when (and (keyword? k) (not (contains? row-of k)))]
-            (str (pr-str k) " — unknown key")))
-        (when (every? keyword? (keys arg))
-          (for [{:keys [key required]} (:rows spec) :when (and required (not (contains? arg key)))]
-            (str (pr-str key) " — missing required key")))
-        (when malli
-          (for [[k v] arg
-                :let [row (row-of k)]
-                :when (and row (constant-form? v))
-                :let [reason (try (let [schema (schema-of row)]
-                                    (when-let [errors (and (some? schema)
-                                                           (seq (literal-errors {:malli malli :schema schema :value v :cljs? cljs?})))]
-                                      (mismatch-reason {:malli malli :errors errors
-                                                        :source (:type row)})))
-                                  (catch Exception _ nil))]
-                :when reason]
-            (str (pr-str k) " " (pr-str v) " — " reason)))))))
+        (when closed
+          (for [k (keys m) :when (and (keyword? k) (not (contains? row-of k)))]
+            (str (at k) " — unknown key")))
+        (when (every? keyword? (keys m))
+          (for [{:keys [key required]} rows :when (and required (not (contains? m key)))]
+            (str (at key) " — missing required key")))
+        (mapcat (fn [[k v]]
+                  (when-let [row (row-of k)]
+                    (value-mismatches {:path (conj path k) :value v :schema (:schema row) :source (:source row)
+                                       :malli malli :cljs? cljs?})))
+                m)))))
+
+#?(:clj
+   (defn- literal-mismatches
+     "Why a map-literal argument does not fit the rows, one text per finding
+      (map-literal-mismatches), nested map literals walked against their `[:map …]` rows. A row
+      whose schema cannot be evaluated here (clj: the evaluated props; cljs: the source form when
+      it is data) skips its value."
+     [{:keys [spec arg schema-of malli cljs?]}]
+     (map-literal-mismatches {:path [] :m arg :closed (:closed spec) :malli malli :cljs? cljs?
+                              :rows (for [row (:rows spec)]
+                                      {:key (:key row) :required (:required row) :source (:type row)
+                                       :schema (try (schema-of row) (catch Exception _ nil))})})))
 
 #?(:clj
    (defn- literal-call

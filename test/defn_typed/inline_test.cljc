@@ -98,6 +98,13 @@
   x
 )
 
+(defn-typed shipped {
+  :order   [:map [:price :int] [:qty [:int {:min 1 :default 1}]]]
+  :address [:maybe [:map {:closed true} [:city :string]]]
+} -> :any
+  [order address]
+)
+
 (defn- literal-caller [] (padded {:a 1}))
 
 ;; a cljs number literal is a double; in clj `1` is a long, which :double rejects
@@ -443,3 +450,37 @@
          (is (= 1 (:exit failing)))
          (is (re-find #"defn-typed NO_SOURCE_PATH:1: \(f …\) :a — missing required key" (:err failing)))
          (is (= [0 "1\n"] [(:exit fitting) (:out fitting)]))))))
+
+#?(:clj
+   (deftest nested-literal-checks
+     (testing "a map literal inside a map literal is judged by its own [:map …] row, the finding led by the full key path"
+       (is (re-find #"^WARNING defn-typed .*: \(shipped …\) :order :price \"x\" — should be an integer\n$"
+                    (compile-warnings '(shipped {:order {:price "x"} :address {:city "Hanoi"}}))))
+       (is (re-find #"\(shipped …\) :order :price — missing required key\n$"
+                    (compile-warnings '(shipped {:order {:qty 2} :address nil}))))
+       (is (re-find #"\(shipped …\) :address :zip — unknown key\n$"
+                    (compile-warnings '(shipped {:order {:price 1} :address {:city "Hanoi" :zip 1}}))))
+       (is (re-find #"\(shipped …\) :order :qty 0 — should be at least 1\n$"
+                    (compile-warnings '(shipped {:order {:price 1 :qty 0} :address nil})))))
+     (testing "a nested value that is not data is skipped; its literal siblings are still judged"
+       (is (= "" (compile-warnings '(let [p "x"] (shipped {:order {:price p} :address nil})))))
+       (is (= "" (compile-warnings '(let [a {:zip 1}] (shipped {:order {:price 1} :address a})))))
+       (is (re-find #"\(shipped …\) :order :qty 0 — should be at least 1\n$"
+                    (compile-warnings '(let [p "x"] (shipped {:order {:price p :qty 0} :address nil}))))))
+     (testing "malli not loaded: the nested key checks run, the nested value check does not"
+       (with-redefs [find-ns (fn [sym] (when-not (= 'malli.core sym) (clojure.lang.Namespace/find sym)))]
+         (is (= "" (compile-warnings '(shipped {:order {:price "x"} :address nil}))))
+         (is (re-find #"\(shipped …\) :order :price — missing required key; :address :zip — unknown key\n$"
+                      (compile-warnings '(shipped {:order {} :address {:city "H" :zip 1}}))))))
+     (testing "a cljs call site walks the nested rows as written"
+       (let [spec {:name `shipped :props `shipped-props
+                   :rows [{:key :order :index 1 :type [:map [:price :int]] :required true}]}
+             err (java.io.StringWriter.)]
+         (binding [*err* err]
+           (defn-typed.core/expand-call {:spec spec :arg {:order {:price "x"}} :fallback :map-call :cljs? true
+                                         :file "f" :line 1}))
+         (is (re-find #"\(shipped …\) :order :price \"x\" — should be an integer\n$" (str err)))))
+     (testing "{:literal-check :error}: a nested finding is a compile error"
+       (with-project-settings {:literal-check :error}
+         #(is (re-find #"\(shipped …\) :address :zip — unknown key$"
+                       (str (compile-error '(shipped {:order {:price 1} :address {:city "H" :zip 1}})))))))))

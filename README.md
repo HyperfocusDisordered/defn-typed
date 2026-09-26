@@ -355,7 +355,9 @@ walking the schema at every call: 814 ns).
 In Clojure, with the switch on or off, a map-literal call is checked where it compiles: an unknown key (of a
 closed map, `^{:closed true}`; `[:map …]` is open), a missing required key (not judged when a key
 is not a keyword literal, `{k 1}`), and each value that is data (a number, string, keyword, boolean, nil, or a
-literal collection of those) against its row schema, ranges included. By default a mismatch prints
+literal collection of those) against its row schema, ranges included. A map literal whose row is a
+`[:map …]` (or `[:maybe [:map …]]`) is walked by the same rules, each finding led by its key path
+(`:order :price — missing required key`); a value in it that is not data is skipped. By default a mismatch prints
 one line to stderr and the call compiles to the map call; the build goes on:
 
 ```
