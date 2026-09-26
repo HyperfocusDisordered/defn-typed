@@ -16,9 +16,10 @@
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]),
    (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]
    :arglists '([{:keys [k]}])} [m] (let [{:keys [k] :or {k 1}} m] (f--positional k))) and, in clj,
-   (signature! #'f \"…\"); every call site goes through expand-call, and a redefinition with
-   another signature reloads the namespaces whose calls compiled to the old positional call
-   (`:stale-callers` in defn-typed.edn).
+   (signature! #'f \"…\") and, for rows typed by a schema var (`:order Order`), (watch-schemas! #'f
+   [#'Order]); every call site goes through expand-call, a redefinition with another signature
+   reloads the namespaces whose calls compiled to the old positional call, and a changed schema
+   var reloads the function's namespace (`:stale-callers` in defn-typed.edn).
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    `defnt` = defn-typed under a short name.
@@ -905,15 +906,18 @@
       call-site expander closes over (expand-call) — the positional fn, each row's key and place,
       its type as written (the literal check judges by it; a runtime row's literal-fill fills by
       it), its absent form (the default written into the call), `:required` / `:runtime`, and the
-      function's own `:literal-check`. Every generated symbol (`p1__12#`, `x__12__auto__`, `G__12`)
-      is written `<stem>__#` and a regex prints as its source, so the same source gives the same
-      string on every read."
+      function's own `:literal-check` — and `:schema-values`, the value of every schema var the
+      rows refer to (schema-vars), so a changed `Order` behind `:order Order` changes it. Every
+      generated symbol (`p1__12#`, `x__12__auto__`, `G__12`) is written `<stem>__#`, a fn inside a
+      value as its class name so written, and a regex prints as its source, so the same source
+      gives the same string on every read."
      [spec]
      (let [text (pr-str (clojure.walk/postwalk
                          (fn [x]
-                           (if-let [[_ stem] (and (symbol? x) (re-matches #"(.*?)__\d+(?:__auto__)?#?" (name x)))]
-                             (symbol (namespace x) (str stem "__#"))
-                             x))
+                           (let [x (if (fn? x) (symbol (.getName (class x))) x)]
+                             (if-let [[_ stem] (and (symbol? x) (re-matches #"(.*?)__\d+(?:__auto__)?#?" (name x)))]
+                               (symbol (namespace x) (str stem "__#"))
+                               x)))
                          spec))]
        (apply str (map #(format "%02x" %)
                        (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes ^String text "UTF-8")))))))
@@ -934,18 +938,25 @@
          (str (ex-message e) " — " (ex-message root))))))
 
 #?(:clj
-   (defn- reload-caller!
-     "Reloads the namespace caller from its file, first dropping it from every inlined-callers entry
+   (defn- reload-namespace!
+     "Reloads the namespace ns-sym from its file, first dropping it from every inlined-callers entry
       (the reload records the positional calls it compiles). A reload that throws prints
-      `defn-typed: reloading <caller> failed: <message>` and returns false; true otherwise."
-     [caller]
-     (swap! inlined-callers #(reduce-kv (fn [m f callers] (assoc m f (disj callers caller))) {} %))
+      `defn-typed: reloading <ns-sym> failed: <message>` and returns false; true otherwise."
+     [ns-sym]
+     (swap! inlined-callers #(reduce-kv (fn [m f callers] (assoc m f (disj callers ns-sym))) {} %))
      (try
-       (require caller :reload)
+       (require ns-sym :reload)
        true
        (catch Throwable e
-         (print-err! (str "defn-typed: reloading " caller " failed: " (innermost-message e)))
+         (print-err! (str "defn-typed: reloading " ns-sym " failed: " (innermost-message e)))
          false))))
+
+#?(:clj
+   (defn- loading?
+     "Whether the namespace ns-sym is being loaded right now (`clojure.core/*pending-paths*`: the
+      file being loaded and the ones requiring it)."
+     [ns-sym]
+     (contains? (set @#'clojure.core/*pending-paths*) (#'clojure.core/root-resource ns-sym))))
 
 #?(:clj
    (defn signature!
@@ -954,7 +965,7 @@
       compiled to its old positional call (inlined-callers) — other than v's own, which is the one
       loading, and one being loaded right now (it compiles against the new definition) — are stale,
       and the `:stale-callers` setting says what happens: `:reload` reloads each from its file
-      (reload-caller!; its literal calls are judged again, so an incompatible one shows its
+      (reload-namespace!; its literal calls are judged again, so an incompatible one shows its
       warning) and prints `defn-typed: <f> changed its signature, reloaded callers: <ns>, …`;
       `:warn` prints `defn-typed: <f> changed its signature; callers compiled with the old one:
       <ns>, … — reload them`; `:off` does neither. Returns v."
@@ -962,18 +973,81 @@
      (let [f (symbol v)
            previous (get (first (swap-vals! signatures assoc f signature)) f)]
        (when (and previous (not= previous signature))
-         (let [loading (set @#'clojure.core/*pending-paths*)
-               callers (->> (disj (get @inlined-callers f) (symbol (namespace f)))
-                            (remove #(loading (#'clojure.core/root-resource %)))
+         (let [callers (->> (disj (get @inlined-callers f) (symbol (namespace f)))
+                            (remove loading?)
                             sort)]
            (when (seq callers)
              (case (setting :stale-callers)
-               :reload (when-let [reloaded (seq (doall (filter reload-caller! callers)))]
+               :reload (when-let [reloaded (seq (doall (filter reload-namespace! callers)))]
                          (print-err! (str "defn-typed: " f " changed its signature, reloaded callers: "
                                           (clojure.string/join ", " reloaded))))
                :warn (print-err! (str "defn-typed: " f " changed its signature; callers compiled with the old one: "
                                       (clojure.string/join ", " callers) " — reload them"))
                :off nil))))
+       v)))
+
+#?(:clj
+   (defn- schema-vars
+     "The schema vars the row types of a defn-typed refer to, sorted by name: the vars their
+      symbols resolve to where the macro expands, at any depth of the type forms (a props slot
+      included), bound to a value that is not a fn (a predicate such as `pos?` holds no rows or
+      defaults). The values these hold at the definition are part of its signature."
+     [types]
+     (->> (tree-seq coll? seq types)
+          (filter symbol?)
+          (keep #(try (resolve %) (catch Exception _ nil)))
+          (filter #(and (var? %) (bound? %) (not (fn? @%))))
+          distinct
+          (sort-by symbol))))
+
+#?(:clj
+   (defonce ^{:doc "`{<fn> #{<schema var> …}}`: the schema vars each defn-typed function watches
+      (watch-schemas!), so its next definition removes the watches it no longer needs."}
+     schema-watches
+     (atom {})))
+
+#?(:clj
+   (defn- schema-changed!
+     "What a changed schema var (schema-var, now another value) does to f (a qualified symbol)
+      typed by it, per the `:stale-callers` setting: nothing while f's namespace is loading (that
+      load redefines f with the new value, e.g. a schema of f's own namespace); `:reload` reloads
+      f's namespace from its file (reload-namespace!), which redefines f, whose signature! then
+      acts on its callers; `:warn` prints `defn-typed: <schema var> changed; <f> and its callers use
+      the old one — reload them`; `:off` nothing."
+     [f schema-var]
+     (let [fn-ns (symbol (namespace f))]
+       (when-not (loading? fn-ns)
+         (case (setting :stale-callers)
+           :reload (reload-namespace! fn-ns)
+           :warn (print-err! (str "defn-typed: " (symbol schema-var) " changed; " f
+                                  " and its callers use the old one — reload them"))
+           :off nil)))))
+
+#?(:clj
+   (defn watch-schemas!
+     "Called by a clj defn-typed definition after signature!, with its var and the schema vars its
+      rows refer to (schema-vars): puts a watch on each, key `[::schema <fn>]`, that calls
+      schema-changed! when the var's root changes to another value, and removes the function's
+      watches on vars it no longer refers to (a definition replaces its watches, never adds to
+      them). No watch at all when `:stale-callers` is `:off`, or when the definition is not read
+      from a file (`*file*` NO_SOURCE_PATH: a REPL-typed one has no disk source to reload). A
+      watch replaced by a later definition does nothing (a reload of f's namespace triggered by
+      one schema var's change replaces the watches that change also notifies). Returns v."
+     [v vars]
+     (let [f (symbol v)
+           watch-key [::schema f]
+           watched (if (and *file* (not= "NO_SOURCE_PATH" *file*) (not= :off (setting :stale-callers)))
+                     (set vars)
+                     #{})
+           [before] (swap-vals! schema-watches #(if (seq watched) (assoc % f watched) (dissoc % f)))]
+       (doseq [old (get before f) :when (not (contains? watched old))]
+         (remove-watch old watch-key))
+       (doseq [schema-var watched]
+         (add-watch schema-var watch-key
+                    (fn watch [_ _ old new]
+                      (when (and (not= old new)
+                                 (identical? watch (get (.getWatches ^clojure.lang.IRef schema-var) watch-key)))
+                        (schema-changed! f schema-var)))))
        v)))
 
 #?(:clj
@@ -1030,7 +1104,9 @@
       `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>] :arglists '([{:keys [k…]}])} [m]
       (let [{:keys [k…] :or {k default}} m] (<name>--positional k…)))`, so everything that reads defn
       and :malli/schema sees a plain defn, and doc shows the rows as its arglist; clj then calls
-      `(signature! #'name \"<signature>\")`, which reloads the callers compiled against another one.
+      `(signature! #'name \"<signature>\")`, which reloads the callers compiled against another one,
+      and `(watch-schemas! #'name [#'Schema …])` when a row refers to a schema var, whose change
+      reloads this namespace.
       A default = `:default` in the row type's own props (`:qty [:int {:default 1}]`), read at
       compile time; a row whose defaults only the evaluated schema shows (runtime-type?) is bound
       through row-value. Instrumentation checks the call
@@ -1149,7 +1225,16 @@
                 body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))
                 ;; clj: after the defn, callers compiled against another signature are stale (cljs:
                 ;; shadow-cljs recompiles the namespaces that depend on a changed one)
-                signature-call (when-not cljs? [(plumbing `(signature! (var ~fn-name) ~(signature spec)))])]
+                ;; clj: the schema vars the rows refer to — their values are part of the signature,
+                ;; and a change of one reloads this namespace (watch-schemas!)
+                deps (when-not cljs? (schema-vars (map :type rows)))
+                signature-call (when-not cljs?
+                                 (cond-> [(plumbing `(signature! (var ~fn-name)
+                                                                 ~(signature (cond-> spec (seq deps)
+                                                                               (assoc :schema-values (into (sorted-map) (map (juxt symbol deref)) deps))))))]
+                                   ;; a function that watched schema vars and refers to none now removes its watches
+                                   (or (seq deps) (contains? @schema-watches q))
+                                   (conj (plumbing `(watch-schemas! (var ~fn-name) [~@(map (fn [v] `(var ~(symbol v))) deps)])))))]
             (if-not malli-opts
               `(do
                  ~(plumbing `(def ~props ~props-form))
