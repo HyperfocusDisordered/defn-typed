@@ -327,12 +327,8 @@ whose body `recur`s to the function (its `recur` takes the map).
 The switch:
 
 - **Clojure**: on by default. Every direct call is covered, `:refer`red ones included (the
-  function's `:inline`). The JVM system property `defn-typed.inline=false`, set while the calling
-  code compiles, keeps the map call; dev/test aliases set it:
-  ```clojure
-  :aliases {:test  {:jvm-opts ["-Ddefn-typed.inline=false"] …}
-            :nrepl {:jvm-opts ["-Ddefn-typed.inline=false"] …}}
-  ```
+  function's `:inline`). The setting `:inline false`, in effect while the calling code compiles,
+  keeps the map call; dev/test aliases set it as a system property (see [Configuration](#configuration)).
   A literal call compiled to the positional call while `malli.instrument` is loaded prints one
   stderr line per JVM: `defn-typed: literal calls compile to positional calls, instrumentation will
   not check them — set -Ddefn-typed.inline=false in your dev/test alias`.
@@ -359,12 +355,15 @@ walking the schema at every call: 814 ns).
 In Clojure, with the switch on or off, a map-literal call is checked where it compiles: an unknown key (of a
 closed map, `^{:closed true}`; `[:map …]` is open), a missing required key (not judged when a key
 is not a keyword literal, `{k 1}`), and each value that is data (a number, string, keyword, boolean, nil, or a
-literal collection of those) against its row schema, ranges included. A mismatch prints one line
-to stderr and the call compiles to the map call; the build goes on:
+literal collection of those) against its row schema, ranges included. By default a mismatch prints
+one line to stderr and the call compiles to the map call; the build goes on:
 
 ```
 WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
+
+With `{:literal-check :error}` in `defn-typed.edn` the mismatch is a compile error instead (see
+[Configuration](#configuration)).
 
 ClojureScript: literal checks and the rewrite run in release (`:advanced`) builds; in dev,
 clj-kondo and malli instrumentation cover the same calls.
@@ -374,6 +373,50 @@ Not checked here: a value that is not data, a row schema that cannot be evaluate
 where malli is already loaded: the dev REPL/test loaders load it first, so the files they (re)load
 get value checks, and a Clojure server compiling from source never loads it, switch on or off (the
 ClojureScript compiler loads it). Key checks always run.
+
+## Configuration
+
+`defn-typed.edn` holds a project's settings. The compiler looks for it in its working directory,
+then in each parent directory up to the filesystem root, and the first one found wins (as
+clj-kondo finds `.clj-kondo`): one file at a monorepo's root serves `clojure` run in `backend/` and
+shadow-cljs run in `miniapp/`, and a nearer file overrides it. It is read once per JVM, at the
+first macroexpansion; no file = the defaults.
+
+```clojure
+{:literal-check :warn   ; :warn (default) | :error
+ :inline        true}   ; true (default) | false
+```
+
+- `:literal-check`: a literal call that fails its compile-time check (see Compile-time literal
+  checks) prints its `WARNING defn-typed …` line and compiles to the map call (`:warn`), or is a
+  compile error with the same text (`:error`): the namespace does not load, the build fails.
+  Clojure and ClojureScript alike.
+- `:inline`: whether a fitting literal call compiles to the positional call in Clojure (see
+  Zero-cost calls). ClojureScript decides by the build: on in release, off in dev.
+
+A JVM system property wins over the file, the file over the default:
+`-Ddefn-typed.literal-check=warn|error`, `-Ddefn-typed.inline=false` (any other value is on). An
+unknown key, or a value outside its list, is an error naming the key and the allowed values.
+
+Strict mode, a literal that fails the check does not compile:
+
+```clojure
+;; defn-typed.edn
+{:literal-check :error}
+```
+
+```
+Syntax error (ExceptionInfo) compiling order-total at (shop.clj:12:3).
+defn-typed shop.clj:12: (order-total …) :qty 0 — should be at least 1
+```
+
+Dev and test keep the map call, so instrumentation checks every call; their aliases set the
+property (the file is shared with production builds):
+
+```clojure
+:aliases {:test  {:jvm-opts ["-Ddefn-typed.inline=false"] …}
+          :nrepl {:jvm-opts ["-Ddefn-typed.inline=false"] …}}
+```
 
 ## Checks run in dev/test only
 
