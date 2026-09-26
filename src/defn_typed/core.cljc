@@ -19,7 +19,9 @@
    (signature! #'f \"…\") and, for rows typed by a schema var (`:order Order`), (watch-schemas! #'f
    [#'Order]); every call site goes through expand-call, a redefinition with another signature
    reloads the namespaces whose calls compiled to the old positional call, and a changed schema
-   var reloads the function's namespace (`:stale-callers` in defn-typed.edn).
+   var reloads the function's namespace (`:stale-callers` in defn-typed.edn). With Typed Clojure on
+   the classpath a clj definition then calls (typed-check! #'f …), which type-checks it
+   (`:typed-check` in defn-typed.edn).
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    `defnt` = defn-typed under a short name.
@@ -496,11 +498,13 @@
 #?(:clj
    (def ^:private setting-values
      "The settings of defn-typed.edn and their allowed values, the first one the default.
-      `:literal-check` and `:unknown-keys` also take a per-function value in `defmeta`."
+      `:literal-check`, `:unknown-keys` and `:typed-check` also take a per-function value in
+      `defmeta`."
      {:literal-check [:warn :error :off]
       :unknown-keys [:warn :error :off]
       :inline [true false]
-      :stale-callers [:reload :warn :off]}))
+      :stale-callers [:reload :warn :off]
+      :typed-check [:warn :error :off]}))
 
 #?(:clj
    (defn- setting-value-problem
@@ -522,7 +526,8 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload}`, merged with the file's map. Throws,
+      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn}`,
+      merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
       outside the key's allowed ones."
      [^java.io.File file]
@@ -552,9 +557,10 @@
    (defn- setting
      "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
       (`defn-typed.inline`: anything but `false` is on; `defn-typed.literal-check` and
-      `defn-typed.unknown-keys`: `warn`, `error` or `off`; `defn-typed.stale-callers`: `reload`,
-      `warn` or `off`), else the project's defn-typed.edn, else
-      the default. A function's own `:literal-check` / `:unknown-keys` in its defmeta wins over it."
+      `defn-typed.unknown-keys`, `defn-typed.typed-check`: `warn`, `error` or `off`;
+      `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's defn-typed.edn, else
+      the default. A function's own `:literal-check` / `:unknown-keys` / `:typed-check` in its
+      defmeta wins over it."
      [k]
      (let [property (System/getProperty (str "defn-typed." (name k)))]
        (cond
@@ -1051,6 +1057,98 @@
        v)))
 
 #?(:clj
+   (def ^:dynamic *typed-checking*
+     "True on the thread that type-checks a definition (typed-check!): the checker expands the
+      defn-typed form again, and that expansion queues no check of its own."
+     false))
+
+#?(:clj
+   (defonce ^:private typed-clojure-present
+     ;; whether Typed Clojure's checker is on the classpath, looked up once per JVM without loading it
+     (delay (some? (.getResource (clojure.lang.RT/baseLoader) "typed/clj/checker.clj")))))
+
+#?(:clj
+   (defonce ^{:private true
+              :doc "`{<fn> <form>}`: the defn-typed / defnt form of each clj definition expanded with
+      Typed Clojure on the classpath, until its typed-check! takes it."}
+     typed-forms
+     (atom {})))
+
+#?(:clj
+   (def typed-check-ms
+     "How long the Typed Clojure check of one definition may run, 2000 ms. It exists for the load:
+      the check runs while the namespace loads, and the checker can run for minutes on a large
+      body; past it the check is abandoned (its thread left to finish, a daemon) and the load
+      goes on."
+     2000))
+
+#?(:clj
+   (defonce ^:private typed-bridge-loaded
+     ;; defn-typed.typed-clojure loaded on the first check; a failed load prints one line and
+     ;; switches the checks off for this JVM
+     (delay (try (require 'defn-typed.typed-clojure) true
+                 (catch Throwable e
+                   (print-err! (str "defn-typed: Typed Clojure checks off — loading defn-typed.typed-clojure failed: "
+                                    (innermost-message e)))
+                   false)))))
+
+#?(:clj
+   (defn- typed-findings
+     "What checking form (the definition of the var v, from file) gives within typed-check-ms, on
+      its own daemon thread (64 MB stack): `[:findings [finding …]]` (check-form!'s, those the
+      checker could not type dropped: could-not-type?), `[:skipped \"over 2 s\"]`, `[:skipped
+      \"StackOverflowError\"]`, or `[:failed message]` when making the function known threw."
+     [{:keys [v form file]}]
+     (let [bridge #(deref (resolve (symbol "defn-typed.typed-clojure" %)))
+           result (promise)
+           check (bound-fn []
+                   (deliver result
+                            (binding [*typed-checking* true]
+                              (try
+                                ((bridge "install-fn!") {:fn-var v})
+                                [:findings ((bridge "check-form!") {:ns (symbol (namespace (symbol v))) :form form :file file})]
+                                (catch Throwable e [:failed (innermost-message e)])))))
+           _ (doto (Thread. nil ^Runnable check "defn-typed-typed-check" (* 64 1024 1024))
+               (.setDaemon true)
+               (.start))
+           [kind findings :as outcome] (deref result typed-check-ms [:skipped (str "over " (quot typed-check-ms 1000) " s")])]
+       (cond
+         (not= :findings kind) outcome
+         (some #(re-find #"StackOverflowError" (:message %)) findings) [:skipped "StackOverflowError"]
+         :else [:findings (vec (remove #((bridge "could-not-type?") (:message %)) findings))]))))
+
+#?(:clj
+   (defn typed-check!
+     "Called by a clj defn-typed definition right after its defn when Typed Clojure was on the
+      classpath at its expansion, with its var, its defmeta's `:typed-check` (nil: none) and the
+      line of its form. Unless the setting (the defmeta's, else the project's) is `:off`: loads
+      defn-typed.typed-clojure (once per JVM), makes the function known to it (install-fn!), checks
+      the definition form (check-form!) within typed-check-ms and reports each finding, those the
+      checker could not type dropped: `:warn` prints `WARNING defn-typed <file>:<line> <message>`
+      (the message led by `input of <f>: ` / `output of <f>: ` when it is about a defn-typed
+      function), `:error` throws an ex-info of those lines without `WARNING ` (the load fails). A
+      check past the deadline prints `defn-typed: Typed Clojure check of <f> skipped (over 2 s)`
+      and one whose checker overflowed its stack `… skipped (StackOverflowError)`. Nothing while
+      defn-typed.typed-clojure itself loads. Returns v."
+     [v mode line]
+     (let [f (symbol v)
+           form (get (first (swap-vals! typed-forms dissoc f)) f)
+           mode (or mode (setting :typed-check))
+           file *file*]
+       (when (and form (not= :off mode) (not (loading? 'defn-typed.typed-clojure)) @typed-bridge-loaded)
+         (let [[kind findings] (typed-findings {:v v :form form :file file})]
+           (case kind
+             :skipped (print-err! (str "defn-typed: Typed Clojure check of " f " skipped (" findings ")"))
+             :failed (print-err! (str "defn-typed: Typed Clojure check of " f " failed: " findings))
+             :findings (when (seq findings)
+                         (let [texts (for [{:keys [message] :as finding} findings]
+                                       (str "defn-typed " (or (:file finding) file) ":" (or (:line finding) line) " " message))]
+                           (if (= :error mode)
+                             (throw (ex-info (clojure.string/join "\n" texts) {::typed-findings (vec findings)}))
+                             (doseq [text texts] (print-err! (str "WARNING " text)))))))))
+       v)))
+
+#?(:clj
    (defn- install-cljs-expander!
      "Makes `name` a macro for the cljs analyzer, beside the fn of that name: interned in the clj
       namespace of the same name (where the analyzer looks up `alias/name` and `ns/name`) and
@@ -1228,6 +1326,12 @@
                 ;; clj: the schema vars the rows refer to — their values are part of the signature,
                 ;; and a change of one reloads this namespace (watch-schemas!)
                 deps (when-not cljs? (schema-vars (map :type rows)))
+                ;; clj with Typed Clojure on the classpath: the definition is type-checked once
+                ;; evaluated (typed-check!), unless its defmeta says :off
+                typed-check-call (when (and (not cljs?) (not *typed-checking*) @typed-clojure-present
+                                            (not= :off (:typed-check meta-keys)))
+                                   (swap! typed-forms assoc q &form)
+                                   [(plumbing `(typed-check! (var ~fn-name) ~(:typed-check meta-keys) ~(:line (meta &form))))])
                 signature-call (when-not cljs?
                                  (cond-> [(plumbing `(signature! (var ~fn-name)
                                                                  ~(signature (cond-> spec (seq deps)
@@ -1245,7 +1349,8 @@
                              ~@(when key-check [key-check])
                              ~call)
                     positional? plumbing)
-                 ~@signature-call)
+                 ~@signature-call
+                 ~@typed-check-call)
               ;; :malli-in-prod: name checks the map and the result around the body, which lives in
               ;; <name>--positional or <name>--body (a recur there recurs with the map, unchecked)
               (let [slot (symbol (str fn-name "--malli-in-prod"))
@@ -1268,7 +1373,8 @@
                           (let [~result ~(if positional? call `(~body-fn ~m))]
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
-                   ~@signature-call)))))))))
+                   ~@signature-call
+                   ~@typed-check-call)))))))))
 
 #?(:clj
    (defmacro defnt
@@ -1287,8 +1393,9 @@
       var metadata in clj and cljs. Expands to (declare name) + the registration, so it runs before
       the var is defined; the keys other than the cases are also recorded in `registry` as the var's
       `:meta` (register-meta!), which is where a plain defn below keeps them. In cljs all of it is
-      under goog.DEBUG, like the cases. `:literal-check` and `:unknown-keys` (`:warn`, `:error` or
-      `:off`) are the function's own settings, winning over the project's; a bad value fails here."
+      under goog.DEBUG, like the cases. `:literal-check`, `:unknown-keys` and `:typed-check` (`:warn`,
+      `:error` or `:off`) are the function's own settings, winning over the project's; a bad value
+      fails here."
      [fn-name m]
      (let [fail! #(throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name}))
            debug (with-meta 'goog.DEBUG {:tag 'boolean})
@@ -1299,7 +1406,7 @@
          (fail! (str "the metadata must be a map literal, got " (pr-str m))))
        (when-let [problem (and (contains? m :malli-in-prod) (malli-in-prod-opts-problem (:malli-in-prod m)))]
          (fail! (str ":malli-in-prod is " problem)))
-       (doseq [k [:literal-check :unknown-keys]
+       (doseq [k [:literal-check :unknown-keys :typed-check]
                :let [problem (and (contains? m k) (setting-value-problem k (get m k)))]
                :when problem]
          (fail! problem))

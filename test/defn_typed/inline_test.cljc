@@ -497,7 +497,7 @@
            (is (= {:literal-check :warn :unknown-keys :warn :inline false :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:literal-check :warn :inline false}"))))
            (is (= {:literal-check :off :unknown-keys :off :inline true :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
            (is (= {:literal-check :warn :unknown-keys :error :inline true :stale-callers :reload :typed-check :warn} (settings-of-file (file "{:unknown-keys :error}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn :typed-check :warn} (settings-of-file (file "{:stale-callers :warn}")))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn :typed-check :warn} (settings-of-file (file "{:stale-callers :warn}"))))
            (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :off} (settings-of-file (file "{:typed-check :off}"))))
            (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline, :stale-callers, :typed-check$"
                         (error "{:strict true}")))

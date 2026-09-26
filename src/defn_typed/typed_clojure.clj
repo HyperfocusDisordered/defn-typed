@@ -8,8 +8,12 @@
      function itself through typed.malli's var-type provider (which reads malli's function
      schemas, so it collects them), `<name>--positional` (where the body lives) and `<name>-props`
      through generated `t/ann` forms, and the defn-typed.core vars a checked expansion calls;
+   - `install-fn!` does the same for one function;
    - `check-form!` checks one top-level form without evaluating it and returns its type errors
-     as data, each marked whether it involves a defn-typed function."
+     as data, each marked whether it involves a defn-typed function;
+   - `could-not-type?` tells a message saying the checker could not type the code from a type error.
+   defn-typed.core loads this namespace itself when Typed Clojure is on the classpath: each
+   defn-typed definition is then checked as it loads (`:typed-check` in defn-typed.edn)."
   (:require [clojure.string :as str]
             [defn-typed.core :refer [defn-typed defnt defmeta schema-props walk-rows]]
             [malli.core :as m]
@@ -77,6 +81,19 @@
   [ns-sym]
   (keep (comp defn-typed-fn val) (sort-by key (ns-interns ns-sym))))
 
+(defn- eval-anns!
+  "Evaluates the `t/ann` forms of the defn-typed.core vars a checked expansion calls (lib-anns),
+   then those of fns (defn-typed-fn), each in its function's namespace. Returns how many."
+  [fns]
+  (let [forms (concat (for [ann lib-anns] ['defn-typed.core ann])
+                      (for [f fns
+                            ann (fn-anns f)]
+                        [(symbol (namespace (:name f))) ann]))]
+    (doseq [[ns-sym ann] forms]
+      (binding [*ns* (the-ns ns-sym)]
+        (eval ann)))
+    (count forms)))
+
 (defmeta install!
   {:doc "Makes Typed Clojure know every defn-typed function of `namespaces` (loaded symbols): collects
          their malli function schemas (typed.malli's var-type provider, registered by its
@@ -88,16 +105,38 @@
 ;; no cases: it registers annotations in the checker's global environment
 (defn-typed install! {:namespaces [:sequential :symbol]} -> :int
   (mi/collect! {:ns namespaces})
-  (let [forms (concat (for [ann lib-anns] ['defn-typed.core ann])
-                      (for [ns-sym namespaces
-                            f (defn-typed-fns ns-sym)
-                            ann (fn-anns f)]
-                        [ns-sym ann]))]
-    (doseq [[ns-sym ann] forms]
-      (binding [*ns* (the-ns ns-sym)]
-        (eval ann)))
-    (count forms))
+  (eval-anns! (mapcat defn-typed-fns namespaces))
 )
+
+(defmeta install-fn!
+  {:doc "install! for the one defn-typed function held by `fn-var`: collects its malli function
+         schema and evaluates the `t/ann` forms of its `<name>--positional` / `<name>--body` and
+         `<name>-props`, and of the defn-typed.core vars a checked expansion calls. What
+         defn-typed.core runs right after a definition it type-checks. Returns the number of
+         `t/ann` forms evaluated (those of the defn-typed.core vars only, when fn-var is not a
+         defn-typed function)."})
+
+;; no cases: it registers annotations in the checker's global environment
+(defn-typed install-fn! {:fn-var :any} -> :int
+  (mi/-collect! fn-var)
+  (eval-anns! (keep defn-typed-fn [fn-var]))
+)
+
+(def could-not-type
+  "Checker messages that say Typed Clojure could not type the code, not that the code has a type
+   error, so defn-typed.core drops them from its definition check (and a tool reporting checker
+   findings can drop them the same way, through could-not-type?):
+   - `Unannotated var …` — the code calls a var the checker has no type for (a plain defn of the
+     project, a library fn without annotations);
+   - `Loop requires more annotations` — a loop whose binding types it cannot infer;
+   - `Missing type for binding: …` — a `binding` of a dynamic var it has no type for."
+  #"^(Unannotated var|Loop requires more annotations)|Missing type for binding: ")
+
+(defn could-not-type?
+  "Whether a checker message (check-form!'s `:message`, its `input of`/`output of` label
+   included) is one of could-not-type."
+  [message]
+  (boolean (re-find could-not-type (str/replace-first message #"^(?:input|output) of \S+: " ""))))
 
 (defn- defn-typed-var?
   "Whether sym, resolved in ns-sym, is a defn-typed function or its `<name>--positional` /
