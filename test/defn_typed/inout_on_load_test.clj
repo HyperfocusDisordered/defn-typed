@@ -6,9 +6,10 @@
             [clojure.test :refer [deftest is testing]]))
 
 (defn- load-source!
-  "Writes lines (the source of namespace ns-name) to a temp file, loads it, and returns
-   {:path :err} (what the load printed to stderr), or {:path :thrown} with the message it failed with."
-  [ns-name lines]
+  "Writes lines (the source of namespace ns-name) to a temp file, loads it, removes the namespace
+   (unless `:keep`), and returns {:path :err} (what the load printed to stderr), or {:path :thrown}
+   with the message it failed with."
+  [ns-name lines & [keep]]
   (let [file (java.io.File/createTempFile (str ns-name "-") ".clj")
         err (java.io.StringWriter.)]
     (.deleteOnExit file)
@@ -19,7 +20,7 @@
       (catch Exception e
         {:path (.getPath file) :err (str err)
          :thrown (ex-message (last (take-while some? (iterate ex-cause e))))})
-      (finally (remove-ns ns-name)))))
+      (finally (when-not keep (remove-ns ns-name))))))
 
 (defn- with-property
   "Runs f with the system property defn-typed.inout-check set to mode (nil: unset), restoring it."
@@ -36,7 +37,7 @@
           (System/clearProperty "defn-typed.inout-check"))))))
 
 (def broken
-  ;; line 1 = the ns form: the broken case [{:n 2} 5] is on line 4
+  ;; line 1 = the ns form: the defmeta is on line 2
   ["(defmeta tripled"
    " {:inout-tests [[{:n 1} 3]"
    "                [{:n 2} 5]]})"
@@ -46,10 +47,10 @@
    ")"])
 
 (deftest broken-case-prints-its-line
-  (testing ":warn (default): one stderr line per failing case, at the case's line; the load goes on"
+  (testing ":warn (default): one stderr line per failing case, at the defmeta's line; the load goes on"
     (let [{:keys [path err thrown]} (with-property nil #(load-source! 'inout-load.broken broken))]
       (is (nil? thrown))
-      (is (= [(str "WARNING " path ":4 inout-load.broken/tripled in/out case 1: {:n 2} → expected 5, got 6")]
+      (is (= [(str "WARNING " path ":2 inout-load.broken/tripled in/out case 1: {:n 2} → expected 5, got 6")]
              (str/split-lines err))))))
 
 (deftest fixed-case-prints-nothing
@@ -70,7 +71,7 @@
   (testing "the project setting :error: the load throws with the line's text"
     (let [{:keys [path err thrown]} (with-property :error #(load-source! 'inout-load.error broken))]
       (is (= "" err))
-      (is (= (str path ":4 inout-load.error/tripled in/out case 1: {:n 2} → expected 5, got 6") thrown))))
+      (is (= (str path ":2 inout-load.error/tripled in/out case 1: {:n 2} → expected 5, got 6") thrown))))
   (testing "the defmeta's own :inout-check :error wins over the project's :warn"
     (let [own (assoc broken 1 " {:inout-check :error :inout-tests [[{:n 1} 3]")]
       (is (re-find #"in/out case 1: \{:n 2\} → expected 5, got 6$"
@@ -90,7 +91,7 @@
                " {:inout-tests [[{:n 1} 3]"
                "                [{:n 2} 5]]})"]
         {:keys [path err]} (with-property nil #(load-source! 'inout-load.below below))]
-    (is (= [(str "WARNING " path ":8 inout-load.below/tripled in/out case 1: {:n 2} → expected 5, got 6")]
+    (is (= [(str "WARNING " path ":6 inout-load.below/tripled in/out case 1: {:n 2} → expected 5, got 6")]
            (str/split-lines err)))))
 
 (deftest case-calling-a-function-defined-below
@@ -107,7 +108,30 @@
                   ""
                   "(defn g [n] (* 2 n))"]
           {:keys [path err]} (load-source! 'inout-load.forward source)]
-      (is (= [(str "WARNING " path ":6 inout-load.forward/f in/out case 1: {:n 2} → expected 7, got 4")]
+      (is (= [(str "WARNING " path ":4 inout-load.forward/f in/out case 1: {:n 2} → expected 7, got 4")]
              (str/split-lines err)))
       (testing "loading the file again prints the line once more, never twice"
         (is (= 1 (count (str/split-lines (:err (load-source! 'inout-load.forward source))))))))))
+
+(deftest waiting-case-of-a-function-never-defined
+  (testing "g declared, never defined: nothing prints; loading f again replaces its waiting watches; defining g then runs the case once"
+    (let [source ["(declare g)"
+                  ""
+                  "(defmeta f {:inout-tests [[{:n 2} 7]]})"
+                  ""
+                  "(defn-typed f {:n :int} -> :int"
+                  "  (g n)"
+                  ")"]
+          watches #(count (.getWatches ^clojure.lang.Var (find-var 'inout-load.never/g)))]
+      (try
+        (is (= "" (:err (load-source! 'inout-load.never source :keep))))
+        (let [{:keys [path err]} (load-source! 'inout-load.never source :keep)]
+          (is (= "" err))
+          (is (= 1 (watches)))
+          (is (= [(str "WARNING " path ":4 inout-load.never/f in/out case 0: {:n 2} → expected 7, got 4")]
+                 (str/split-lines (let [e (java.io.StringWriter.)]
+                                    (binding [*err* e *ns* (the-ns 'inout-load.never)]
+                                      (eval '(defn g [n] (* 2 n))))
+                                    (str e)))))
+          (is (= 0 (watches))))
+        (finally (remove-ns 'inout-load.never))))))

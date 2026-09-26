@@ -499,13 +499,14 @@
 #?(:clj
    (def ^:private setting-values
      "The settings of defn-typed.edn and their allowed values, the first one the default.
-      `:literal-check`, `:unknown-keys` and `:typed-check` also take a per-function value in
-      `defmeta`."
+      `:literal-check`, `:unknown-keys`, `:typed-check` and `:inout-check` also take a per-function
+      value in `defmeta`."
      {:literal-check [:warn :error :off]
       :unknown-keys [:warn :error :off]
       :inline [true false]
       :stale-callers [:reload :warn :off]
-      :typed-check [:warn :error :off]}))
+      :typed-check [:warn :error :off]
+      :inout-check [:warn :error :off]}))
 
 #?(:clj
    (defn- setting-value-problem
@@ -527,7 +528,8 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn}`,
+      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn
+      :inout-check :warn}`,
       merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
       outside the key's allowed ones."
@@ -557,11 +559,11 @@
 #?(:clj
    (defn- setting
      "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
-      (`defn-typed.inline`: anything but `false` is on; `defn-typed.literal-check` and
-      `defn-typed.unknown-keys`, `defn-typed.typed-check`: `warn`, `error` or `off`;
-      `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's defn-typed.edn, else
-      the default. A function's own `:literal-check` / `:unknown-keys` / `:typed-check` in its
-      defmeta wins over it."
+      (`defn-typed.inline`: anything but `false` is on; `defn-typed.literal-check`,
+      `defn-typed.unknown-keys`, `defn-typed.typed-check` and `defn-typed.inout-check`: `warn`, `error`
+      or `off`; `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's
+      defn-typed.edn, else the default. A function's own `:literal-check` / `:unknown-keys` /
+      `:typed-check` / `:inout-check` in its defmeta wins over it."
      [k]
      (let [property (System/getProperty (str "defn-typed." (name k)))]
        (cond
@@ -1226,6 +1228,54 @@
      (vary-meta form assoc :typed.clojure/ignore true)))
 
 #?(:clj
+   (defonce ^{:private true
+              :doc "`{<fn> <load scope>}`: the defn-typed functions expanded with no defmeta above them,
+      each with the load-scope it expanded in, until a defmeta of that name expands: one in the
+      same scope is written below the definition."}
+     awaiting-meta
+     (atom {})))
+
+#?(:clj
+   (defn- load-scope
+     "What identifies the file being loaded or compiled where a macro expands: the thread binding of
+      clj `*file*` (Compiler.load binds it once per file) or cljs `cljs.analyzer/*cljs-file*` (bound
+      once per file compile), identical for every form of one load and new on the next; nil outside
+      a file (a form typed into a REPL)."
+     [cljs?]
+     (some-> ^clojure.lang.Var (if cljs? (resolve 'cljs.analyzer/*cljs-file*) #'*file*) .getThreadBinding)))
+
+#?(:clj
+   (defn- dev-only
+     "form as it runs in a dev build: cljs under goog.DEBUG (a release build drops it), clj as is."
+     [cljs? form]
+     (if cljs? `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) ~form) form)))
+
+#?(:clj
+   (defn- pending-vars
+     "cljs: the vars of the namespace being compiled that are declared but not defined yet (their
+      analyzed def is `:declared`), as `(var …)` forms; clj: none."
+     [env]
+     (when (:ns env)
+       (let [ns-sym (-> env :ns :name)
+             defs (get-in @@(resolve 'cljs.env/*compiler*) [:cljs.analyzer/namespaces ns-sym :defs])]
+         (vec (for [[sym {:keys [declared]}] (sort-by key defs) :when declared]
+                `(var ~(symbol (str ns-sym) (str sym)))))))))
+
+#?(:clj
+   (defn- inout-check-call
+     "The `(inout-check! {…})` form that runs the cases of fn-name after its definition, under
+      goog.DEBUG in cljs, when m (its defmeta's map, the defmeta's line as its `::line` meta) holds
+      `:inout-tests` and its `:inout-check` (m's, else the project's) is not `:off`; nil otherwise."
+     [{:keys [env fn-name m]}]
+     (let [mode (or (:inout-check m) (setting :inout-check))
+           cljs? (boolean (:ns env))]
+       (when (and (contains? m :inout-tests) (not= :off mode))
+         (dev-only cljs?
+                   `(inout-check! {:var (var ~fn-name) :mode ~mode :line ~(::line (meta m))
+                                   :file ~(if cljs? (some-> (resolve 'cljs.analyzer/*cljs-file*) deref str) *file*)
+                                   :pending ~(pending-vars env)}))))))
+
+#?(:clj
    (defmacro defn-typed
      "(defn-typed name {key schema …} -> <out-schema> body…): a one-arity function of one map.
       The input = the map literal of its rows, one entry per line: `key schema`, or `key [props schema]`
@@ -1318,7 +1368,8 @@
                                      (filter :runtime rows)))
               ;; the defmeta written above: its keys other than the cases go into the defn's attr-map,
               ;; so :doc is the var's docstring in clj and cljs alike
-              meta-keys (dissoc (get @pending-meta q) :inout-tests)
+              defmeta-above (get @pending-meta q)
+              meta-keys (dissoc defmeta-above :inout-tests)
               ;; a real map's keys beyond the rows, reported by name's :unknown-keys; no code for :off
               unknown-keys (let [project (setting :unknown-keys)] (or (:unknown-keys meta-keys) project))
               ;; m holds a key beyond the rows iff it holds more keys than rows it holds: a count and
@@ -1354,6 +1405,11 @@
                                                                    :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
                                                                    :file *file* :line (deref clojure.lang.Compiler/LINE)})))))]
           (swap! pending-meta dissoc q)
+          ;; no cases above: a defmeta below, in this same load, runs them (defmeta)
+          (when-not *typed-checking*
+            (if (contains? defmeta-above :inout-tests)
+              (swap! awaiting-meta dissoc q)
+              (swap! awaiting-meta assoc q (load-scope cljs?))))
           ;; cljs: a release build only (see install-cljs-expander!); a dev build keeps plain calls
           (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
           (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
@@ -1374,6 +1430,10 @@
                 ;; malli.dev.cljs/start! in the hot-reload after-load hook)
                 instrumented-before-call (when-not cljs? [(plumbing `(instrumented-before! '~q))])
                 keep-instrumented-call (when-not cljs? [(plumbing `(keep-instrumented! (var ~fn-name)))])
+                ;; the defmeta's cases run once the definition (re-instrumented) is in place
+                inout-call (when-not *typed-checking*
+                             (some-> (inout-check-call {:env &env :fn-name fn-name :m defmeta-above})
+                                     plumbing vector))
                 signature-call (when-not cljs?
                                  (cond-> [(plumbing `(signature! (var ~fn-name)
                                                                  ~(signature (cond-> spec (seq deps)
@@ -1393,6 +1453,7 @@
                              ~call)
                     positional? plumbing)
                  ~@keep-instrumented-call
+                 ~@inout-call
                  ~@signature-call
                  ~@typed-check-call)
               ;; :malli-in-prod: name checks the map and the result around the body, which lives in
@@ -1419,6 +1480,7 @@
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
                    ~@keep-instrumented-call
+                   ~@inout-call
                    ~@signature-call
                    ~@typed-check-call)))))))))
 
@@ -1444,27 +1506,35 @@
       fails here."
      [fn-name m]
      (let [fail! #(throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name}))
-           debug (with-meta 'goog.DEBUG {:tag 'boolean})
-           dev (fn [form] (if (:ns &env) `(when ~debug ~form) form))]
+           cljs? (boolean (:ns &env))
+           dev #(dev-only cljs? %)]
        (when-not (symbol? fn-name)
          (fail! "the first argument must be the function's name"))
        (when-not (map? m)
          (fail! (str "the metadata must be a map literal, got " (pr-str m))))
        (when-let [problem (and (contains? m :malli-in-prod) (malli-in-prod-opts-problem (:malli-in-prod m)))]
          (fail! (str ":malli-in-prod is " problem)))
-       (doseq [k [:literal-check :unknown-keys :typed-check]
+       (doseq [k [:literal-check :unknown-keys :typed-check :inout-check]
                :let [problem (and (contains? m k) (setting-value-problem k (get m k)))]
                :when problem]
          (fail! problem))
-       (swap! pending-meta assoc (qualified &env fn-name) m)
        (let [other (dissoc m :inout-tests)
-             q (qualified &env fn-name)]
+             q (qualified &env fn-name)
+             ;; a defn-typed of this name expanded earlier in this same load, with no cases above it
+             [awaiting] (swap-vals! awaiting-meta dissoc q)
+             below? (and (contains? awaiting q) (identical? (get awaiting q) (load-scope cljs?)))
+             m (vary-meta m assoc ::line (:line (meta &form)))]
+         ;; below the definition its cases are run here, so they stay out of the next definition's
+         (swap! pending-meta assoc q (cond-> m below? (dissoc :inout-tests)))
          `(do
             (declare ~fn-name)
             ~@(when (seq other)
                 [(plumbing (dev `(register-meta! (var ~fn-name) ~other)))])
             ~@(when (contains? m :inout-tests)
-                [(plumbing (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))))]))))))
+                [(plumbing (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))))])
+            ~@(when below?
+                (some-> (inout-check-call {:env &env :fn-name fn-name :m m})
+                        plumbing vector)))))))
 
 (declare with-defaults)
 
@@ -1591,23 +1661,30 @@
    blocked in."
   false)
 
+(defn- run-case
+  "One case [i args expected] of the var v as check-var runs it: {:i :in :expected :actual}; a
+   throwing case reports `:actual [:thrown message]`, its ex-data as `:thrown-data` and the
+   throwable itself as `::thrown`."
+  [v [i args expected]]
+  (when *trace-cases*
+    (println (str "inout-case " (var-name v) " " i " " (pr-str args)))
+    (flush))
+  (try {:i i :in args :expected expected :actual (apply @v args)}
+       (catch #?(:clj Throwable :cljs :default) e
+         {:i i :in args :expected expected
+          :actual [:thrown (ex-message e)] :thrown-data (ex-data e) ::thrown e})))
+
+(defn- failed? [{:keys [expected actual]}]
+  (not= expected actual))
+
 (defn check-var
   "{:var sym :cases n :failures [{:i :in :expected :actual}]}; a throwing case
    reports `:actual [:thrown message]` and its ex-data as `:thrown-data`."
   [v]
-  (let [f @v
-        results (mapv (fn [[i args expected]]
-                        (when *trace-cases*
-                          (println (str "inout-case " (var-name v) " " i " " (pr-str args)))
-                          (flush))
-                        (try {:i i :in args :expected expected :actual (apply f args)}
-                             (catch #?(:clj Throwable :cljs :default) e
-                               {:i i :in args :expected expected
-                                :actual [:thrown (ex-message e)] :thrown-data (ex-data e)})))
-                      (var-cases v))]
+  (let [results (mapv #(run-case v %) (var-cases v))]
     {:var (var-name v)
      :cases (count results)
-     :failures (filterv #(not= (:expected %) (:actual %)) results)}))
+     :failures (into [] (comp (filter failed?) (map #(dissoc % ::thrown))) results)}))
 
 (defn case-vars
   "Distinct vars among `vars` that have cases, sorted by name."
@@ -1620,6 +1697,109 @@
 
 (defn check-vars [vars]
   (mapv check-var (case-vars vars)))
+
+(defn- case-text
+  "`<file>:<line> <ns/f> in/out case <i>: <in> → expected <out>, got <actual>` for a failing case
+   (run-case's result); a throwing one ends `threw <message>`."
+  [{:keys [file line f result]}]
+  (let [{:keys [i in expected actual]} result]
+    (str file ":" line " " f " in/out case " i ": " (pr-str (shown-in in)) " → expected " (pr-str expected) ", "
+         (if (contains? result ::thrown) (str "threw " (second actual)) (str "got " (pr-str actual))))))
+
+(defn- report-cases!
+  "Reports texts (case-text) as mode says: `:warn` one `WARNING <text>` stderr line each (cljs
+   console.error), `:error` throws an ex-info of the texts, one per line."
+  [mode texts]
+  (when (seq texts)
+    (if (= :error mode)
+      (throw (ex-info (apply str (interpose "\n" texts)) {::inout-failures (vec texts)}))
+      (doseq [text texts] (print-err! (str "WARNING " text))))))
+
+#?(:clj
+   (defn- unbound-call?
+     "Whether e (or a cause of it) is the throw of calling a var that holds no value yet: a
+      `(declare g)` whose defn comes further down the file (thrown by clojure.lang.Var$Unbound)."
+     [^Throwable e]
+     (boolean (some (fn [^Throwable t]
+                      (and (instance? IllegalStateException t)
+                           (= "clojure.lang.Var$Unbound" (some-> (first (.getStackTrace t)) .getClassName))))
+                    (take-while some? (iterate ex-cause e))))))
+
+#?(:clj
+   (defn- unbound-vars
+     "The vars interned in ns-sym that hold no value yet, taken from their Var$Unbound roots."
+     [ns-sym]
+     (keep (fn [^clojure.lang.Var v]
+             (let [root (.getRawRoot v)]
+               (when (instance? clojure.lang.Var$Unbound root) (.-v ^clojure.lang.Var$Unbound root))))
+           (vals (ns-interns ns-sym)))))
+
+#?(:clj
+   (defonce ^{:doc "`{<fn> #{[<var> <watch key>] …}}`: the one-shot watches inout-check! put on the
+      vars a case of <fn> called before they were defined; the next definition of <fn> removes them."}
+     deferred-cases
+     (atom {})))
+
+#?(:clj
+   (defn- forget-deferred!
+     "Removes the watches of f's (a qualified symbol) deferred cases, all of them or those of watch-key."
+     ([f] (forget-deferred! f nil))
+     ([f watch-key]
+      (let [mine? #(or (nil? watch-key) (= watch-key (second %)))
+            [before] (swap-vals! deferred-cases update f #(set (remove mine? %)))]
+        (doseq [[v k] (filter mine? (get before f))]
+          (remove-watch v k))))))
+
+(declare inout-run!)
+
+#?(:clj
+   (defn- defer-case!
+     "Puts a one-shot watch, key `[::deferred-case <f> <i>]`, on each of vars (the unbound vars of
+      f's namespace): the first that becomes bound removes them all and runs case i again
+      (inout-run! with `:only i`)."
+     [{:keys [check i vars]}]
+     (let [f (symbol (:var check))
+           watch-key [::deferred-case f i]]
+       (swap! deferred-cases update f (fnil into #{}) (map (fn [v] [v watch-key]) vars))
+       (doseq [v vars]
+         (add-watch v watch-key
+                    (fn [_ _ _ value]
+                      (when-not (instance? clojure.lang.Var$Unbound value)
+                        (forget-deferred! f watch-key)
+                        (inout-run! (assoc check :only i)))))))))
+
+(defn- inout-run!
+  "Runs the cases of check's var (all, or `:only` the one of that index) as check-var runs them and
+   reports the failing ones (report-cases! with `:mode`, at `:file` `:line`, the defmeta's). A case that threw because it called a function not defined yet is not reported:
+   clj defers it (defer-case!) until one of its namespace's unbound vars is defined; cljs skips it
+   (it threw while one of `:pending`, the vars declared above but not yet defined, is undefined)."
+  [{:keys [var mode file line only] :as check}]
+  (let [results (for [[i :as c] (var-cases var) :when (or (nil? only) (= i only))] (run-case var c))
+        waiting? (fn [{e ::thrown}]
+                   (and e #?(:clj (unbound-call? e)
+                             :cljs (boolean (some #(undefined? @%) (:pending check))))))
+        failures (filter failed? results)]
+    #?(:clj (doseq [{:keys [i]} (filter waiting? failures)
+                    :let [vars (unbound-vars (symbol (namespace (symbol var))))]
+                    :when (seq vars)]
+              (defer-case! {:check check :i i :vars vars})))
+    (report-cases! mode (for [result (remove waiting? failures)]
+                          (case-text {:file file :line line
+                                      :f (var-name var) :result result})))))
+
+(defn inout-check!
+  "Called right after a defn-typed definition whose defmeta above holds `:inout-tests` (after its
+   keep-instrumented!), or by a defmeta written below the definition, with
+   {:var :mode :file :line :pending}: runs the var's cases, the ones check-var runs, and
+   reports each failing one as mode (`:inout-check`, never `:off`: no call is emitted then) says:
+   `:warn` prints `WARNING <file>:<line> <ns/f> in/out case <i>: <in> → expected <out>, got
+   <actual>` (`threw <message>`), `:error` throws that text. All passing: nothing. A case calling a
+   function defined further down waits for it (inout-run!). Replaces the waiting cases of the
+   function's previous definition. Returns the var."
+  [{:keys [var] :as check}]
+  #?(:clj (forget-deferred! (symbol var)))
+  (inout-run! check)
+  var)
 
 #?(:clj
    (defmacro check-ns
