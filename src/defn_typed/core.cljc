@@ -27,7 +27,8 @@
    - `deftests!` (clj) defines one clojure.test test `<ns>--<fn>-inout` per such var so run-tests
      and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
-  #?(:clj (:require [clojure.test :as test])
+  #?(:clj (:require [clojure.edn]
+                   [clojure.test :as test])
      :cljs (:require-macros [defn-typed.core])))
 
 (defn var-name [v] (symbol v))
@@ -370,14 +371,76 @@
            `(:default (schema-props (peek (nth ~props ~index)))))))))
 
 #?(:clj
+   (def ^:private setting-values
+     "The settings of defn-typed.edn and their allowed values, the first one the default."
+     {:literal-check [:warn :error]
+      :inline [true false]}))
+
+#?(:clj
+   (defn settings-file
+     "The defn-typed.edn that serves dir (a java.io.File): the one in dir, else in its nearest parent
+      that has one (the way clj-kondo finds .clj-kondo), up to the filesystem root; nil when none."
+     [^java.io.File dir]
+     (some #(let [f (java.io.File. ^java.io.File % "defn-typed.edn")] (when (.isFile f) f))
+           (take-while some? (iterate #(.getParentFile ^java.io.File %) (.getAbsoluteFile dir))))))
+
+#?(:clj
+   (defn settings-of-file
+     "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
+      `{:literal-check :warn :inline true}`, merged with the file's map. Throws, naming the file,
+      when its content is not a map, holds a key other than those two, or a value outside the key's
+      allowed ones."
+     [^java.io.File file]
+     (let [where (str "defn-typed " (some-> file .getPath) ": ")
+           m (if file (clojure.edn/read-string (slurp file)) {})]
+       (when-not (map? m)
+         (throw (ex-info (str where "the settings must be a map, got " (pr-str m)) {:file file})))
+       (doseq [[k v] m]
+         (let [allowed (get setting-values k)]
+           (cond
+             (nil? allowed)
+             (throw (ex-info (str where "unknown key " (pr-str k) " — the keys are "
+                                  (apply str (interpose ", " (keys setting-values))))
+                             {:file file :key k}))
+             (not-any? #(= v %) allowed)
+             (throw (ex-info (str where (pr-str k) " must be one of "
+                                  (apply str (interpose ", " (map pr-str allowed))) ", got " (pr-str v))
+                             {:file file :key k}))
+             ;; a known key with an allowed value: merged below
+             :else nil)))
+       (merge (into {} (map (fn [[k vs]] [k (first vs)])) setting-values) m))))
+
+#?(:clj
+   (defonce ^:private project-settings
+     ;; the defn-typed.edn serving the JVM's working directory (where clj and shadow-cljs compile):
+     ;; read once per JVM, at the first macroexpansion
+     (delay (settings-of-file (settings-file (java.io.File. (System/getProperty "user.dir")))))))
+
+#?(:clj
+   (defn- setting
+     "A setting's value: the JVM system property `defn-typed.<key>` when set (`defn-typed.inline`:
+      anything but `false` is on; `defn-typed.literal-check`: `warn` or `error`), else the
+      project's defn-typed.edn, else the default."
+     [k]
+     (let [property (System/getProperty (str "defn-typed." (name k)))]
+       (cond
+         (nil? property) (get @project-settings k)
+         (= :inline k) (not= "false" property)
+         (some #{(keyword property)} (get setting-values k)) (keyword property)
+         :else (throw (ex-info (str "defn-typed: the system property defn-typed." (name k)
+                                    " must be one of " (apply str (interpose ", " (map name (get setting-values k))))
+                                    ", got " (pr-str property))
+                               {:property (str "defn-typed." (name k))}))))))
+
+#?(:clj
    (defn- inline-on?
-     "Whether a fitting literal call compiles to the positional call: clj — unless the JVM system
-      property `defn-typed.inline` is `false` (a dev/test alias sets it, so the call goes through
-      the instrumented var); cljs — the compiler's `:optimizations` is `:advanced` (a release build)."
+     "Whether a fitting literal call compiles to the positional call: clj — the `:inline` setting
+      (a dev/test alias sets `-Ddefn-typed.inline=false`, so the call goes through the instrumented
+      var); cljs — the compiler's `:optimizations` is `:advanced` (a release build)."
      [cljs?]
      (if cljs?
        (= :advanced (some-> (resolve 'cljs.env/*compiler*) deref deref :options :optimizations))
-       (not= "false" (System/getProperty "defn-typed.inline")))))
+       (setting :inline))))
 
 #?(:clj
    (defonce ^:private instrumentation-warned
@@ -492,31 +555,38 @@
    (defn expand-call
      "A call site of a defn-typed function, as its call-site expander (clj `:inline`, cljs a macro
       of the same name) compiles it: a map-literal argument is checked (literal-mismatches) and a
-      mismatch prints one `WARNING defn-typed <file>:<line>: (f …) <findings>` to stderr; with the
-      switch on (inline-on?) a literal that fits becomes the positional call; everything else =
-      `fallback`, the normal call of the var. Never throws."
+      mismatch prints one `WARNING defn-typed <file>:<line>: (f …) <findings>` to stderr, or with
+      the setting `:literal-check :error` throws an ex-info of that text without `WARNING ` (the
+      compile fails); with the switch on (inline-on?) a literal that fits becomes the positional
+      call; everything else = `fallback`, the normal call of the var. Throws only that mismatch
+      and a bad setting."
      [{:keys [spec arg fallback cljs? file line]}]
-     (try
-       (if-not (map? arg)
-         fallback
-         (let [inline? (inline-on? cljs?)
-               schema-of (if cljs?
-                           #(when (constant-form? (:type %)) (:type %))
-                           (let [props (some-> (find-var (:props spec)) deref)]
-                             #(when props (peek (nth props (:index %))))))
-               mismatches (seq (literal-mismatches {:spec spec :arg arg :schema-of schema-of
-                                                    :malli (malli-check-fns cljs?) :cljs? cljs?}))]
-           (when mismatches
-             (binding [*out* *err*]
-               (println (str "WARNING defn-typed " file ":" line ": (" (name (:name spec)) " …) "
-                             (apply str (interpose "; " mismatches))))))
-           (if (and inline? (not mismatches) (:positional spec)
-                    ;; a key beyond the rows (open map) or not a keyword literal: the map call
-                    (every? (set (map :key (:rows spec))) (keys arg)))
-             (do (when-not cljs? (warn-if-instrumented!))
-                 (literal-call spec arg))
-             fallback)))
-       (catch Exception _ fallback))))
+     (let [literal-check (setting :literal-check)] ; a bad setting fails every call site
+       (try
+         (if-not (map? arg)
+           fallback
+           (let [inline? (inline-on? cljs?)
+                 schema-of (if cljs?
+                             #(when (constant-form? (:type %)) (:type %))
+                             (let [props (some-> (find-var (:props spec)) deref)]
+                               #(when props (peek (nth props (:index %))))))
+                 mismatches (seq (literal-mismatches {:spec spec :arg arg :schema-of schema-of
+                                                      :malli (malli-check-fns cljs?) :cljs? cljs?}))]
+             (when mismatches
+               (let [text (str "defn-typed " file ":" line ": (" (name (:name spec)) " …) "
+                               (apply str (interpose "; " mismatches)))]
+                 (if (= :error literal-check)
+                   (throw (ex-info text {::literal-mismatches (vec mismatches)}))
+                   (binding [*out* *err*]
+                     (println (str "WARNING " text))))))
+             (if (and inline? (not mismatches) (:positional spec)
+                      ;; a key beyond the rows (open map) or not a keyword literal: the map call
+                      (every? (set (map :key (:rows spec))) (keys arg)))
+               (do (when-not cljs? (warn-if-instrumented!))
+                   (literal-call spec arg))
+               fallback)))
+         (catch Exception e
+           (if (::literal-mismatches (ex-data e)) (throw e) fallback))))))
 
 #?(:clj
    (defn- install-cljs-expander!
@@ -590,7 +660,8 @@
           (fail! "no input rows between the name and ->"))
         (when (arg-vector? body)
           (fail! (str "args are bound from the rows: drop the argument vector " (pr-str (first body)))))
-        (let [table (table-rows fail! input)
+        (let [_ @project-settings ; a bad defn-typed.edn fails the first definition
+              table (table-rows fail! input)
               _ (when-let [paths (seq (entry-default-paths table))]
                   (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))
               in-schema (defaults-optional table)
