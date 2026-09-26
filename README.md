@@ -40,6 +40,16 @@ def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 Clojure has no such form. defn-typed gives you the familiar shape once, and everything below reads
 that one signature; nothing is written twice.
 
+```clojure
+(defn-typed order-total {
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+```
+
+Same shape, and the signature also says what none of the four can: `discount` is 0 to 100.
+
 What closes most of the gap:
 
 1. **Type checking.** Typed Clojure checks bodies and call sites against the signature: a wrong key,
@@ -75,23 +85,6 @@ ready-made schema language in Clojure, and they read as argument declarations. T
 the tools that read them: Typed Clojure and clj-kondo statically, the build for literal calls,
 malli's instrumentation at run time in the REPL and in tests. What the function does, then example
 inputs and outputs, then the typed function: plain data, in that order, nothing else.
-
-```clojure
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-```
-
-Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
-range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
-after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
-nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
-functions in, see malli in production). Literal calls such
-as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
-checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
-see Static checking.
 
 ## Examples
 
