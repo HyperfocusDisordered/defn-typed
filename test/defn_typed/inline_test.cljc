@@ -228,7 +228,7 @@
    (deftest inline-under-instrumentation-warns-once
      (testing "a literal compiled inline while malli.instrument is loaded prints one stderr line per JVM; `false` prints none"
        (require 'malli.instrument)
-       (let [warned @#'defn-typed.core/instrumentation-warned
+       (let [warned (or (some-> (resolve 'defn-typed.core/instrumentation-warned) deref) (atom false))
              before @warned
              err (java.io.StringWriter.)]
          (try
