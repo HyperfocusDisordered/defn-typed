@@ -21,19 +21,28 @@
                   (or (some destructuring? items) (next body))))))
 
 (defn- entry-defaults!
-  "Mirrors defn-typed.core/entry-default-paths: reports every row (nested `[:map …]` rows included)
-   whose entry props carry `:default`, which belongs in the type's own props."
+  "Mirrors defn-typed.core/entry-default-paths: reports every row (the rows of nested `[:map …]`
+   and of the maps a `:sequential`, `:vector` or `:maybe` holds included) whose entry props carry
+   `:default`, which belongs in the type's own props."
   [finding! path props type]
   (when (and props (api/map-node? props)
              (some #(and (api/keyword-node? %) (= :default (api/sexpr %))) (take-nth 2 (:children props))))
     (finding! props (str (apply str (interpose " " (map pr-str path)))
                          " · put :default into the schema's props: [:int {:default v}]")))
-  (when (and (api/vector-node? type) (= :map (some-> (first (:children type)) api/sexpr)))
-    (doseq [row (rest (:children type))
-            :when (api/vector-node? row)
-            :let [[k a b] (:children row)]
-            :when (api/keyword-node? k)]
-      (entry-defaults! finding! (conj path (api/sexpr k)) (when b a) (or b a)))))
+  (let [head (when (api/vector-node? type) (some-> (first (:children type)) api/sexpr))]
+    (cond
+      (= :map head)
+      (doseq [row (rest (:children type))
+              :when (api/vector-node? row)
+              :let [[k a b] (:children row)]
+              :when (api/keyword-node? k)]
+        (entry-defaults! finding! (conj path (api/sexpr k)) (when b a) (or b a)))
+
+      (#{:sequential :vector :maybe} head)
+      (entry-defaults! finding! path nil (last (:children type)))
+
+      ;; any other schema holds no rows
+      :else nil)))
 
 (defn- name-node?
   "Whether node is a symbol token: the function's name."

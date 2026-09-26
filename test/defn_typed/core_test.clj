@@ -272,7 +272,9 @@
       (is (= [others [4 "defn-typed: :x/b and :y/b both bind b"]]
              (lint "(defn-typed f {:x/b :int :y/b :int} -> :any b)")))
       (is (= [others [4 "defn-typed: metadata on the argument table is not supported; declare data as a row, e.g. {:row :map}"]]
-             (lint "(defn-typed f ^{:closed true} {:a :int} -> :any a)")))))
+             (lint "(defn-typed f ^{:closed true} {:a :int} -> :any a)")))
+      (is (= [others [4 "defn-typed: :items :qty · put :default into the schema's props: [:int {:default v}]"]]
+             (lint "(defn-typed f {:items [:sequential [:map [:qty {:default 1} :int]]]} -> :any items)")))))
   (testing "the macro throws a compile error naming the same problem (an odd map literal is the reader's error)"
     (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
       (is (= "defmeta 5: the first argument must be the function's name" (error '(defn-typed.core/defmeta 5 {:doc "x"}))))
