@@ -1,8 +1,7 @@
 (ns hooks.defn-typed
   "clj-kondo hooks for defn-typed.core. defn-typed: rewrites
-   (defn-typed name ^{table-props}? {key schema …} -> <out-schema> body…) into the def + defn it expands to,
-   the row keys bound as locals (and `^{:as sym}` on the map as the whole map), so the name, the
-   schemas and the body lint like any defn. defmeta
+   (defn-typed name {key schema …} -> <out-schema> body…) into the def + defn it expands to,
+   the row keys bound as locals, so the name, the schemas and the body lint like any defn. defmeta
    (written above the function): rewrites (defmeta name {…}) into (do (declare name) {…}), as the
    macro declares it, so every symbol inside the map (the :inout-tests pairs included) is resolved
    like any other code."
@@ -20,15 +19,6 @@
     (boolean (and (seq items)
                   (every? #(or (symbol? %) (destructuring? %)) items)
                   (or (some destructuring? items) (next body))))))
-
-(defn- split-as
-  "The input map's reader-meta nodes without their `:as` entry, and that entry's value node: `:as`
-   binds the whole map (the macro's own :as), it is not a table prop."
-  [meta-nodes]
-  (let [as? #(and (api/keyword-node? (first %)) (= :as (api/sexpr (first %))))
-        pairs #(partition 2 (:children %))]
-    [(map #(if (api/map-node? %) (api/map-node (mapcat identity (remove as? (pairs %)))) %) meta-nodes)
-     (some #(when (api/map-node? %) (second (first (filter as? (pairs %))))) meta-nodes)]))
 
 (defn- entry-defaults!
   "Mirrors defn-typed.core/entry-default-paths: reports every row (nested `[:map …]` rows included)
@@ -79,11 +69,6 @@
                     rows
                     (filter #(and (api/vector-node? %) (api/keyword-node? (first (:children %))))
                             (mapcat #(when (api/vector-node? %) (:children %)) input)))
-        [table-meta whole] (when table? (split-as (:meta table)))
-        ;; a row whose local is the ^{:as sym} symbol: reported below, and the rewrite leaves :as out
-        whole-row (when (and whole (api/token-node? whole))
-                    (some #(when (= (str (api/sexpr whole)) (name (api/sexpr %))) %)
-                          (filter api/keyword-node? (take-nth 2 (:children table)))))
         props (api/token-node (symbol (str (api/sexpr fn-name) "-props")))
         m (api/token-node 'm__defn-typed)
         ;; the row keys as locals, also bound once to `_` so a row the body does not read reports
@@ -98,8 +83,8 @@
     (doseq [[local ks] (group-by #(name (api/sexpr %)) (filter api/keyword-node? (take-nth 2 (:children (when table? table)))))
             :when (next ks)]
       (finding! (second ks) (str (apply str (interpose " and " (map (comp pr-str api/sexpr) ks))) " both bind " local)))
-    (when whole-row
-      (finding! whole (str (pr-str (api/sexpr whole-row)) " and ^{:as " (api/sexpr whole) "} both bind " (api/sexpr whole))))
+    (when (and table? (seq (:meta table)))
+      (finding! table "metadata on the argument table is not supported; declare data as a row, e.g. {:row :map}"))
     (when doc
       (finding! doc "docstring goes to defmeta"))
     (if arrow
@@ -118,7 +103,7 @@
                [(api/token-node 'do)
                 (api/list-node [(api/token-node 'def) props
                                 (api/vector-node (concat [(api/keyword-node :map)]
-                                                         (if table? (concat table-meta rows) input)))])
+                                                         (if table? rows input)))])
                 (api/list-node
                   (concat [(api/token-node 'defn) fn-name]
                           (when doc [doc])
@@ -130,8 +115,7 @@
                            (api/vector-node [m])
                            (api/list-node
                              (concat [(api/token-node 'let)
-                                      (api/vector-node [(api/map-node (concat [(api/keyword-node :keys) (api/vector-node locals)]
-                                                                                (when (and whole (not whole-row)) [(api/keyword-node :as) whole])))
+                                      (api/vector-node [(api/map-node [(api/keyword-node :keys) (api/vector-node locals)])
                                                         m
                                                         (api/token-node '_) (api/vector-node locals)])]
                                      body))]))])

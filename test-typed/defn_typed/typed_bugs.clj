@@ -39,10 +39,10 @@
 )
 
 (defmeta tagged
-  {:doc "The row with its label tagged: ^{:as row} passes the whole map to the body."})
+  {:doc "The row with its label tagged: the whole map is a declared row."})
 
-(defn-typed tagged ^{:as row} {:label :string} -> [:map [:label :string]]
-  (assoc row :tag (str "#" label))
+(defn-typed tagged {:row [:map [:label :string]]} -> [:map [:label :string]]
+  (assoc row :tag (str "#" (:label row)))
 )
 
 (defmeta countdown
@@ -61,7 +61,7 @@
    (cover-of {:lot_id 9 :cover_photo nil :photo_keys []})
    (let [id (:id (summary-of {:id 9}))]
      (cover-of {:lot_id id :cover_photo (label-of {:name "a"}) :photo_keys ["k"]}))
-   (:label (tagged {:label "a"}))
+   (:label (tagged {:row {:label "a"}}))
    (inc (countdown {:n 3}))])
 
 (defn bug-arg-type

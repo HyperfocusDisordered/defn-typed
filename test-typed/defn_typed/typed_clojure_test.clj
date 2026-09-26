@@ -41,9 +41,9 @@
    '[defn-typed lot-count]         "Type mismatch:"})
 
 (deftest install-annotates-every-defn-typed-function
-  ;; 3 defn-typed.core vars; per function its -props, plus --positional when the body is there
+  ;; 2 defn-typed.core vars; per function its -props, plus --positional when the body is there
   ;; (countdown recurs to itself: its body stays in the var, which typed.malli's provider types)
-  (is (= (+ 3 (* 2 6) 1) @installed)))
+  (is (= (+ 2 (* 2 6) 1) @installed)))
 
 (deftest the-planted-bugs-are-reported
   (doseq [[form message] planted]

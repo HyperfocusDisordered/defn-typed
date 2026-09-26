@@ -19,12 +19,9 @@
             [typed.malli.schema-to-type :as s->t]))
 
 (def lib-anns
-  "defn-typed.core vars a checked expansion calls: `with-defaults` and `row-value` (the bindings
-   of a function whose body stays in the var itself: more than 20 rows, a recur to the function,
-   or `:malli-in-prod` with `^{:as row}`) and `register-tests!` (the legacy `tests`). Trusted,
-   not checked (`^:no-check`)."
-  `[(t/ann ~(with-meta 'defn-typed.core/with-defaults {:no-check true}) [t/Any t/Any :-> t/Any])
-    (t/ann ~(with-meta 'defn-typed.core/row-value {:no-check true}) [t/Any t/Any :-> t/Any])
+  "defn-typed.core vars a checked expansion calls: `row-value` (the binding of a row read at call
+   time) and `register-tests!` (the legacy `tests`). Trusted, not checked (`^:no-check`)."
+  `[(t/ann ~(with-meta 'defn-typed.core/row-value {:no-check true}) [t/Any t/Any :-> t/Any])
     (t/ann ~(with-meta 'defn-typed.core/register-tests! {:no-check true}) [t/Any t/Any :-> t/Any])])
 
 (defn- type-of
@@ -45,7 +42,7 @@
 (defn- fn-anns
   "The `t/ann` forms of the defn-typed function f (defn-typed-fn): `<name>-props` as t/Any, the
    body fn `<name>--positional` (the rows' types in entry order, a row optional without a default
-   nilable, then the whole map for `^{:as row}`) or `<name>--body` (the map), each returning the
+   nilable) or `<name>--body` (the map), each returning the
    output's type."
   [{:keys [name props out]}]
   (let [sibling #(symbol (namespace name) (str (clojure.core/name name) %))
@@ -58,10 +55,7 @@
         positional (resolve (sibling "--positional"))
         body (resolve (sibling "--body"))
         params (cond
-                 positional (cond-> (vec row-types)
-                              ;; ^{:as row}: the defaults-filled map follows the rows
-                              (= (inc (count rows)) (count (first (:arglists (meta positional)))))
-                              (conj (type-of props)))
+                 positional (vec row-types)
                  body [(type-of props)]
                  ;; the body is in name itself, which the provider types
                  :else nil)]
