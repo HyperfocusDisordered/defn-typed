@@ -16,12 +16,13 @@
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]),
    (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]
    :arglists '([{:keys [k]}])} [m] (let [{:keys [k] :or {k 1}} m] (f--positional k))) and, in clj,
-   (signature! #'f \"…\") and, for rows typed by a schema var (`:order Order`), (watch-schemas! #'f
-   [#'Order]); every call site goes through expand-call, a redefinition with another signature
-   reloads the namespaces whose calls compiled to the old positional call, and a changed schema
-   var reloads the function's namespace (`:stale-callers` in defn-typed.edn). With Typed Clojure on
-   the classpath a clj definition then calls (typed-check! #'f …), which type-checks it
-   (`:typed-check` in defn-typed.edn).
+   (instrumented-before! 'f) before that defn and (keep-instrumented! #'f) after it, so a var malli
+   instrumented stays instrumented when redefined, (signature! #'f \"…\") and, for rows typed by a
+   schema var (`:order Order`), (watch-schemas! #'f [#'Order]); every call site goes through
+   expand-call, a redefinition with another signature reloads the namespaces whose calls compiled
+   to the old positional call, and a changed schema var reloads the function's namespace
+   (`:stale-callers` in defn-typed.edn). With Typed Clojure on the classpath a clj definition then
+   calls (typed-check! #'f …), which type-checks it (`:typed-check` in defn-typed.edn).
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    `defnt` = defn-typed under a short name.
@@ -1057,6 +1058,40 @@
        v)))
 
 #?(:clj
+   (defonce ^{:doc "The defn-typed functions (qualified symbols) whose var held a malli-instrumented fn
+      when their definition began (instrumented-before!), until keep-instrumented! takes them."}
+     instrumented-definitions
+     (atom #{})))
+
+#?(:clj
+   (defn instrumented-before!
+     "Called by a clj defn-typed definition right before its defn, with its qualified symbol f:
+      records f in instrumented-definitions when malli.instrument is loaded and f's var holds a
+      fn malli instrumented (its meta has `:malli.instrument/original`), whose wrapper the defn
+      is about to drop."
+     [f]
+     (when (and (find-ns 'malli.instrument)
+                (some-> (find-var f) deref meta :malli.instrument/original))
+       (swap! instrumented-definitions conj f))
+     nil))
+
+#?(:clj
+   (defn keep-instrumented!
+     "Called by a clj defn-typed definition right after its defn, with its var v: when
+      instrumented-before! recorded it, registers v's function schema with malli
+      (malli.instrument/-collect!, what collect! does for one var) and instruments v alone
+      (malli.instrument/instrument! with default options, so a reporter malli.dev/start! captured
+      on malli.core/-fail! still applies; instrumenting unwraps first, so one wrapper). malli is
+      resolved, never required: that var being instrumented means it is loaded. Returns v."
+     [v]
+     (let [f (symbol v)]
+       (when (contains? (first (swap-vals! instrumented-definitions disj f)) f)
+         ((resolve 'malli.instrument/-collect!) v)
+         ((resolve 'malli.instrument/instrument!)
+          {:filters [(fn [n s _] (= f (symbol (str n) (str s))))]}))
+       v)))
+
+#?(:clj
    (def ^:dynamic *typed-checking*
      "True on the thread that type-checks a definition (typed-check!): the checker expands the
       defn-typed form again, and that expansion queues no check of its own."
@@ -1203,6 +1238,8 @@
       (let [{:keys [k…] :or {k default}} m] (<name>--positional k…)))`, so everything that reads defn
       and :malli/schema sees a plain defn, and doc shows the rows as its arglist; clj then calls
       `(signature! #'name \"<signature>\")`, which reloads the callers compiled against another one,
+      around the defn `(instrumented-before! 'name)` / `(keep-instrumented! #'name)`, which instrument
+      the new fn when malli had instrumented the one it replaces,
       and `(watch-schemas! #'name [#'Schema …])` when a row refers to a schema var, whose change
       reloads this namespace.
       A default = `:default` in the row type's own props (`:qty [:int {:default 1}]`), read at
@@ -1332,6 +1369,11 @@
                                             (not= :off (:typed-check meta-keys)))
                                    (swap! typed-forms assoc q &form)
                                    [(plumbing `(typed-check! (var ~fn-name) ~(:typed-check meta-keys) ~(:line (meta &form))))])
+                ;; clj: a var malli instrumented stays instrumented through the redefinition (cljs: malli
+                ;; collects schemas at compile time, a macro, and re-instruments through
+                ;; malli.dev.cljs/start! in the hot-reload after-load hook)
+                instrumented-before-call (when-not cljs? [(plumbing `(instrumented-before! '~q))])
+                keep-instrumented-call (when-not cljs? [(plumbing `(keep-instrumented! (var ~fn-name)))])
                 signature-call (when-not cljs?
                                  (cond-> [(plumbing `(signature! (var ~fn-name)
                                                                  ~(signature (cond-> spec (seq deps)
@@ -1344,11 +1386,13 @@
                  ~(plumbing `(def ~props ~props-form))
                  ;; the body calls name before its defn: a recursive call, name passed as a value
                  ~@(when positional? [`(declare ~fn-name) body-defn])
+                 ~@instrumented-before-call
                  ;; positional: name only binds the rows and calls the body; else the body is here
                  ~(cond-> `(defn ~fn-name ~attrs [~m]
                              ~@(when key-check [key-check])
                              ~call)
                     positional? plumbing)
+                 ~@keep-instrumented-call
                  ~@signature-call
                  ~@typed-check-call)
               ;; :malli-in-prod: name checks the map and the result around the body, which lives in
@@ -1364,6 +1408,7 @@
                                  (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts})))
                    (declare ~fn-name)
                    ~(or body-defn `(defn ~body-fn {:no-doc true} [~m] ~call))
+                   ~@instrumented-before-call
                    ~(plumbing
                      `(defn ~fn-name ~attrs [~m]
                         ~@(when key-check [key-check])
@@ -1373,6 +1418,7 @@
                           (let [~result ~(if positional? call `(~body-fn ~m))]
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
+                   ~@keep-instrumented-call
                    ~@signature-call
                    ~@typed-check-call)))))))))
 
