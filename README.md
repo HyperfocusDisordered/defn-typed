@@ -40,15 +40,42 @@ def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 Clojure has no such form. defn-typed gives you the familiar shape once, and everything below reads
 that one signature; nothing is written twice.
 
+<!-- readme-test -->
 ```clojure
+(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
+
+(defmeta order-total
+  {:doc "Order total: price × qty, minus a percent discount."
+   :inout-tests [[{:price 100}                      100]
+                 [{:price 100 :qty 3}               300]
+                 [{:price 100 :qty 3 :discount 10}  270]]})
+
 (defn-typed order-total {
   :price    [:int {:min 1}]
   :qty      [:int {:min 1 :default 1}]
   :discount [:int {:min 0 :max 100 :default 0}]
 } -> :int
+  (quot (* price qty (- 100 discount)) 100)
+)
+
+(order-total {:price 100}) ;=> 100
+(order-total {:price 100 :qty 3 :discount 10}) ;=> 270
 ```
 
 Same shape, and the signature also says what none of the four can: `discount` is 0 to 100.
+
+```clojure
+(order-total {:price 100})
+;; output: 100
+;; compile-time defaults: :qty 1, :discount 0
+(order-total {:price 100 :discount 150})
+;; compiler: WARNING defn-typed … :discount 150 — should be at most 100
+(check-var #'order-total)
+;; output: {:var example/order-total, :cases 3, :failures []}
+(doc order-total)
+;; output: ([{:keys [price qty discount]}])
+;; output: Order total: price × qty, minus a percent discount.
+```
 
 What closes most of the gap:
 
@@ -92,8 +119,6 @@ inputs and outputs, then the typed function: plain data, in that order, nothing 
 
 <!-- readme-test -->
 ```clojure
-(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
-
 (defn-typed greet {:name :string} -> :string
   (str "Hi, " name))
 
@@ -139,41 +164,6 @@ clj compiles literal calls positionally by default, cljs in release builds, see 
 ```clojure
 (check-var #'fizzbuzz)
 ;; output: {:var example/fizzbuzz, :cases 5, :failures []}
-```
-
-### Defaults, ranges, docs, example tests — `order-total`
-
-<!-- readme-test -->
-```clojure
-(defmeta order-total
-  {:doc "Order total: price × qty, minus a percent discount."
-   :inout-tests [[{:price 100}                      100]
-                 [{:price 100 :qty 3}               300]
-                 [{:price 100 :qty 3 :discount 10}  270]]})
-
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-  (quot (* price qty (- 100 discount)) 100)
-)
-
-(order-total {:price 100}) ;=> 100
-(order-total {:price 100 :qty 3 :discount 10}) ;=> 270
-```
-
-```clojure
-(order-total {:price 100})
-;; output: 100
-;; compile-time defaults: :qty 1, :discount 0
-(order-total {:price 100 :discount 150})
-;; compiler: WARNING defn-typed … :discount 150 — should be at most 100
-(check-var #'order-total)
-;; output: {:var example/order-total, :cases 3, :failures []}
-(doc order-total)
-;; output: ([{:keys [price qty discount]}])
-;; output: Order total: price × qty, minus a percent discount.
 ```
 
 ### Nested map — `line-total`
