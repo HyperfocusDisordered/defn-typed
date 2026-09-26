@@ -531,6 +531,8 @@
                     (compile-warnings '(cart-total {:items [{:price 1} {:price 0}]}))))
        (is (re-find #"\(nested-deep …\) :orders 0 :lines 1 :qty \"2\" — should be an integer\n$"
                     (compile-warnings '(nested-deep {:orders [{:lines [nil {:sku "a" :qty "2"}]}]}))))
+       (is (re-find #"\(cart-total …\) :items 0 :qtty — unknown key\n$"
+                    (compile-warnings '(cart-total {:items '({:price 1 :qtty 2})}))))
        (is (= "" (compile-warnings '(let [p 1] (cart-total {:items [{:price p}]}))))))
      (testing "malli not loaded: the item key checks still run"
        (with-redefs [find-ns (fn [sym] (when-not (= 'malli.core sym) (clojure.lang.Namespace/find sym)))]

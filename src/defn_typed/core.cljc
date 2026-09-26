@@ -559,7 +559,9 @@
       number failing a double schema (`:double`, `:float`, `double?`, `float?`) is judged again as a
       double, so `1` fits `:double` and `[:double {:min 2}]` against `1` reads `should be at least 2`."
      [{:keys [malli schema value cljs?]}]
-     (let [value (if cljs? (js-number-literal value) value)]
+     (let [value (if cljs? (js-number-literal value) value)
+           ;; a defaulted key may be absent: the value is judged before with-defaults fills it
+           schema (defaults-optional schema)]
        (when-not ((:validate malli) schema value)
          (cond->> (:errors ((:explain malli) schema value))
            cljs? (mapcat (fn [{:keys [in schema] :as error}]
@@ -583,6 +585,17 @@
          (str "does not match " (pr-str source))))))
 
 #?(:clj
+   (defn- literal-items
+     "The item forms of a sequence literal: a vector literal's items, a quoted list's items; nil for
+      any other form."
+     [form]
+     (cond
+       (vector? form) form
+       (and (seq? form) (= 'quote (first form)) (seq? (second form))) (vec (second form))
+       ;; not a sequence literal
+       :else nil)))
+
+#?(:clj
    (defn- map-schema
      "The `[:map …]` schema a map literal is judged against: schema itself, or the one inside
       `[:maybe …]`; nil for any other schema."
@@ -595,23 +608,50 @@
          nil))))
 
 #?(:clj
+   (defn- item-schema
+     "The item schema a sequence literal's items are judged against one by one: the schema of
+      `[:sequential …]` / `[:vector …]` (or one inside `[:maybe …]`) when a map schema is inside it
+      at some depth; nil for any other schema (malli judges the value whole)."
+     [schema]
+     (when (vector? schema)
+       (case (first schema)
+         (:sequential :vector) (let [item (peek schema)]
+                                 (when (or (map-schema item) (item-schema item)) item))
+         :maybe (item-schema (peek schema))
+         ;; any other schema: malli judges the value whole
+         nil))))
+
+#?(:clj
    (declare ^:private map-literal-mismatches))
 
 #?(:clj
    (defn- value-mismatches
      "Why the literal value at path does not fit schema, one text per finding: a map literal
-      against a `[:map …]` (map-schema) → the findings inside it (map-literal-mismatches); other
-      data (constant-form?) → `<path> <value> — <reason>` (mismatch-reason) when malli is loaded;
-      a symbol, a call, or no schema → none. JVM malli judges a cljs literal as JS numbers
-      (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
+      against a `[:map …]` (map-schema) → the findings inside it (map-literal-mismatches); a
+      vector literal or quoted list against a sequence of maps (item-schema) → each item's, its
+      index in the path; other data (constant-form?) → `<path> <value> — <reason>`
+      (mismatch-reason) when malli is loaded; a symbol, a call, or no schema → none. JVM malli
+      judges a cljs literal as JS numbers (literal-errors: `1` fits `:double`, `1.0` fits `:int`)."
      [{:keys [path value schema source malli cljs?]}]
-     (let [nested (map-schema schema)]
+     (let [nested (map-schema schema)
+           item (item-schema schema)
+           items (literal-items value)]
        (cond
          (and nested (map? value))
          (map-literal-mismatches {:path path :m value :malli malli :cljs? cljs?
                                   :rows (for [entry (rest nested) :when (vector? entry)
                                               :let [[k entry-props type] (row-parts entry)]]
-                                          {:key k :required (not (:optional entry-props)) :schema type :source type})})
+                                          ;; a defaulted key, or one whose type is a symbol or a call
+                                          ;; (it may carry a default), may be absent
+                                          {:key k :schema type :source type
+                                           :required (not (or (:optional entry-props) (contains? (schema-props type) :default)
+                                                              (symbol? type) (seq? type)))})})
+
+         (and item items)
+         (apply concat (map-indexed (fn [i v]
+                                      (value-mismatches {:path (conj path i) :value v :schema item :source item
+                                                         :malli malli :cljs? cljs?}))
+                                    items))
 
          (and malli (some? schema) (constant-form? value))
          (when-let [errors (try (seq (literal-errors {:malli malli :schema schema :value value :cljs? cljs?}))
@@ -655,17 +695,6 @@
                               :rows (for [row (:rows spec)]
                                       {:key (:key row) :required (:required row) :source (:type row)
                                        :schema (try (schema-of row) (catch Exception _ nil))})})))
-
-#?(:clj
-   (defn- literal-items
-     "The item forms of a sequence literal: a vector literal's items, a quoted list's items; nil for
-      any other form."
-     [form]
-     (cond
-       (vector? form) form
-       (and (seq? form) (= 'quote (first form)) (seq? (second form))) (vec (second form))
-       ;; not a sequence literal
-       :else nil)))
 
 #?(:clj
    (defn- embeddable?

@@ -136,6 +136,14 @@
            cart-total-props))
     (is (= '(def f-props [:map [:o [:vector [:map [:l [:sequential [:maybe [:map [:q {:optional true} [:int {:default 1}]]]]]]]]]])
            (second (macroexpand-1 '(defn-typed.core/defn-typed f {:o [:vector [:map [:l [:sequential [:maybe [:map [:q [:int {:default 1}]]]]]]]]} -> :any o))))))
+  (testing "a row with no default inside is destructured, not read at call time: a predicate symbol (number?, map?) carries no default"
+    (doseq [row '[[:maybe number?] [:vector map?] [:sequential [:map [:a :int]]] number?]]
+      (let [expansion (macroexpand-1 (list 'defn-typed.core/defn-typed 'f {:a row} '-> :any 'a))]
+        (is (not-any? #{`core/row-value} (tree-seq coll? seq expansion))
+            (pr-str row)))))
+  (testing "a row with a default inside a :sequential row is read at call time"
+    (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a [:sequential [:map [:q [:int {:default 1}]]]]} -> :any a))]
+      (is (some #{`core/row-value} (tree-seq coll? seq expansion)))))
   (testing ":default in the entry props of a map row inside a :sequential row fails at compile time naming its path"
     (is (re-find #"^defn-typed f: :items :qty · put :default into the schema's props"
                  (try (pr-str (macroexpand-1 '(defn-typed.core/defn-typed f {:items [:sequential [:map [:qty {:default 1} :int]]]} -> :any items)))
