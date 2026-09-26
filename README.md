@@ -52,7 +52,7 @@ Same shape, and the signature also says what none of the four can: `discount` is
 
 What closes most of the gap:
 
-1. **Type checking.** Typed Clojure checks bodies and call sites against the signature: a wrong key,
+1. **Type checking.** [Typed Clojure](https://github.com/typedclojure/typedclojure) checks bodies and call sites against the signature: a wrong key,
    a wrong type, a body that returns something other than its `->`. No hand-written annotations,
    the schemas are the types (see Static checking).
 2. **Compile-time argument matching.** Every literal call is matched against the signature during
@@ -64,12 +64,12 @@ What closes most of the gap:
 
 Optional, on the same forms, each adds:
 
-4. **Runtime contracts.** malli instrumentation checks every call in the REPL and in tests,
+4. **Runtime contracts.** [malli](https://github.com/metosin/malli) instrumentation checks every call in the REPL and in tests,
    including the ranges and predicates the static tools cannot express; production opts in per
    function (see malli in production).
-5. **Editor lint.** clj-kondo flags wrong keys and types as you type, in clj and cljs (see Static
+5. **Editor lint.** [clj-kondo](https://github.com/clj-kondo/clj-kondo) flags wrong keys and types as you type, in clj and cljs (see Static
    checking).
-6. **Docs.** The docstring and the pairs live in `defmeta`; `(doc f)` and cljdoc show them.
+6. **Docs.** The docstring and the pairs live in `defmeta`; `(doc f)` and [cljdoc](https://cljdoc.org) show them.
 
 The map at the call site is compile-time syntax, not a runtime value. A literal call such as
 `(order-total {:price 100 :qty 2})` is taken apart when the calling form is compiled: on `require`
