@@ -415,14 +415,18 @@
          (let [file (fn [content] (let [root (settings-tree {"defn-typed.edn" content})] (java.io.File. root "defn-typed.edn")))
                error (fn [content] (try (settings-of-file (file content)) nil
                                         (catch clojure.lang.ExceptionInfo e (ex-message e))))]
-           (is (= {:literal-check :warn :inline true} (settings-of-file nil)))
-           (is (= {:literal-check :warn :inline true} (settings-of-file (file "{}"))))
-           (is (= {:literal-check :error :inline true} (settings-of-file (file "{:literal-check :error}"))))
-           (is (= {:literal-check :warn :inline false} (settings-of-file (file "{:literal-check :warn :inline false}"))))
-           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :inline$"
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true} (settings-of-file nil)))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline true} (settings-of-file (file "{}"))))
+           (is (= {:literal-check :error :unknown-keys :warn :inline true} (settings-of-file (file "{:literal-check :error}"))))
+           (is (= {:literal-check :warn :unknown-keys :warn :inline false} (settings-of-file (file "{:literal-check :warn :inline false}"))))
+           (is (= {:literal-check :off :unknown-keys :off :inline true} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
+           (is (= {:literal-check :warn :unknown-keys :error :inline true} (settings-of-file (file "{:unknown-keys :error}"))))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline$"
                         (error "{:strict true}")))
-           (is (re-find #"^defn-typed .*defn-typed\.edn: :literal-check must be one of :warn, :error, got :fail$"
+           (is (re-find #"^defn-typed .*defn-typed\.edn: :literal-check must be one of :warn, :error, :off, got :fail$"
                         (error "{:literal-check :fail}")))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: :unknown-keys must be one of :warn, :error, :off, got :loud$"
+                        (error "{:unknown-keys :loud}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :inline must be one of true, false, got \"no\"$"
                         (error "{:inline \"no\"}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: the settings must be a map, got \[:error\]$"
@@ -462,8 +466,65 @@
                                 (str (compile-error '(order-total {:price 100 :qty 0}))))))))
        (with-project-settings {}
          #(with-property "defn-typed.literal-check" "strict"
-            (fn [] (is (= "defn-typed: the system property defn-typed.literal-check must be one of warn, error, got \"strict\""
+            (fn [] (is (= "defn-typed: the system property defn-typed.literal-check must be one of warn, error, off, got \"strict\""
                           (compile-error '(order-total {:price 100 :qty 2}))))))))))
+
+#?(:clj
+   (deftest literal-check-off
+     (testing "{:literal-check :off}: a failing literal prints nothing, throws nothing, and compiles to exactly what :warn compiles"
+       (let [expand (fn [arg] (binding [*err* (java.io.StringWriter.)] ((:inline (meta #'pair)) arg)))
+             under-warn (with-project-settings {:literal-check :warn} #(mapv expand '[{:zz 1 :b 10} {:a 1 :b 10}]))]
+         (with-project-settings {:literal-check :off}
+           #(do (is (= "" (compile-warnings '(order-total {:price 100 :qty 0}))))
+                (is (= "" (compile-warnings '(pair {:zz 1 :b 10}))))
+                (is (nil? (compile-error '(pair {:zz 1 :b 10}))))
+                (is (= under-warn (mapv expand '[{:zz 1 :b 10} {:a 1 :b 10}])))))))
+     (testing "the system property `off` wins over an :error file"
+       (with-project-settings {:literal-check :error}
+         #(with-property "defn-typed.literal-check" "off"
+            (fn [] (is (nil? (compile-error '(order-total {:price 100 :qty 0}))))
+                   (is (= "" (compile-warnings '(order-total {:price 100 :qty 0}))))))))))
+
+#?(:clj
+   (defn- with-defined
+     "Calls f with forms evaluated in this namespace, the symbols syms unmapped after."
+     [forms syms f]
+     (binding [*ns* (the-ns 'defn-typed.inline-test)]
+       (doseq [form forms] (eval form)))
+     (try (f)
+          (finally (doseq [s syms] (ns-unmap 'defn-typed.inline-test s))))))
+
+#?(:clj
+   (deftest per-function-settings
+     (testing "defmeta :literal-check wins over the project's: :error fails a literal of that function under a :warn file, :off silences it under an :error file; other functions keep the file's"
+       (with-project-settings {:literal-check :warn}
+         #(with-defined '[(defn-typed.core/defmeta strict-f {:literal-check :error})
+                          (defn-typed.core/defn-typed strict-f {:a :int} -> :any a)]
+            '[strict-f strict-f--positional strict-f-props]
+            (fn []
+              (is (re-find #"^defn-typed .*: \(strict-f …\) :zz — unknown key$" (str (compile-error '(strict-f {:a 1 :zz 2})))))
+              (is (re-find #"^WARNING defn-typed .*\(pair …\) :zz — unknown key\n$" (compile-warnings '(pair {:a 1 :zz 2})))))))
+       (with-project-settings {:literal-check :error}
+         #(with-defined '[(defn-typed.core/defmeta quiet-f {:literal-check :off})
+                          (defn-typed.core/defn-typed quiet-f {:a :int} -> :any a)]
+            '[quiet-f quiet-f--positional quiet-f-props]
+            (fn []
+              (is (nil? (compile-error '(quiet-f {:a 1 :zz 2}))))
+              (is (= "" (compile-warnings '(quiet-f {:a 1 :zz 2}))))
+              (is (re-find #"\(pair …\) :zz — unknown key$" (str (compile-error '(pair {:a 1 :zz 2})))))))))
+     (testing "the function's own value wins over the system property too"
+       (with-project-settings {}
+         #(with-property "defn-typed.literal-check" "error"
+            (fn []
+              (with-defined '[(defn-typed.core/defmeta quiet-f {:literal-check :off})
+                              (defn-typed.core/defn-typed quiet-f {:a :int} -> :any a)]
+                '[quiet-f quiet-f--positional quiet-f-props]
+                (fn [] (is (nil? (compile-error '(quiet-f {:a 1 :zz 2}))))))))))
+     (testing "a bad :literal-check / :unknown-keys in defmeta fails the definition naming the allowed values"
+       (doseq [k [:literal-check :unknown-keys]]
+         (is (= (str "defmeta f: " k " must be one of :warn, :error, :off, got :loud")
+                (try (pr-str (macroexpand-1 (list 'defn-typed.core/defmeta 'f {k :loud})))
+                     (catch Exception e (ex-message (or (ex-cause e) e))))))))))
 
 #?(:clj
    (deftest inline-setting
