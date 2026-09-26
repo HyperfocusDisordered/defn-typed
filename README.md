@@ -37,19 +37,29 @@ Python
 def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 ```
 
-Clojure has no such form. The checkers exist: clj-kondo, Typed Clojure and malli check keys, types
-and values well, but each wants its own description written apart from the function. defn-typed
-gives you the familiar shape once and hands each tool its own form of it:
+Clojure has no such form. defn-typed gives you the familiar shape once, and everything below reads
+that one signature; nothing is written twice.
 
-- **static checks**: clj-kondo flags wrong keys and types as you type (see Static checking);
-- **type checking** (optional, clj): Typed Clojure checks bodies and call sites against the same
-  signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
-- **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
-  during the build (see Compile-time literal checks);
-- **runtime contracts**: malli checks every call in the REPL and in tests;
-- **example tests**: the `[in out]` pairs above the function run as tests;
-- **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
-  as a plain `defn` (see Zero-cost calls).
+What closes most of the gap:
+
+1. **Type checking.** Typed Clojure checks bodies and call sites against the signature: a wrong key,
+   a wrong type, a body that returns something other than its `->`. No hand-written annotations,
+   the schemas are the types (see Static checking).
+2. **Compile-time argument matching.** Every literal call is matched against the signature during
+   the build: missing or unknown keys, wrong types and out-of-range constants warn (or fail, by
+   config), and the call compiles to a positional call, as fast as a plain `defn` (see Zero-cost
+   calls).
+3. **Example tests of pure functions.** The `[in out]` pairs above the function run as tests and
+   document it.
+
+Optional, on the same forms, each adds:
+
+4. **Runtime contracts.** malli instrumentation checks every call in the REPL and in tests,
+   including the ranges and predicates the static tools cannot express; production opts in per
+   function (see malli in production).
+5. **Editor lint.** clj-kondo flags wrong keys and types as you type, in clj and cljs (see Static
+   checking).
+6. **Docs.** The docstring and the pairs live in `defmeta`; `(doc f)` and cljdoc show them.
 
 The schemas are [malli](https://github.com/metosin/malli) schemas: plain data, the most complete
 ready-made schema language in Clojure, and they read as argument declarations. The checks come from
