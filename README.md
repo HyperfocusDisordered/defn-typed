@@ -51,9 +51,11 @@ gives you the familiar shape once and hands each tool its own form of it:
 - **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
   as a plain `defn` (see Zero-cost calls).
 
-The schemas are [malli](https://github.com/metosin/malli) schemas: malli does the validation, the
-error messages and the instrumentation. What the function does, then example inputs and outputs,
-then the typed function: plain data, in that order, nothing else.
+The schemas are [malli](https://github.com/metosin/malli) schemas: plain data, the most complete
+ready-made schema language in Clojure, and they read as argument declarations. The checks come from
+the tools that read them: Typed Clojure and clj-kondo statically, the build for literal calls,
+malli's instrumentation at run time in the REPL and in tests. What the function does, then example
+inputs and outputs, then the typed function: plain data, in that order, nothing else.
 
 ```clojure
 (defn-typed order-total {
