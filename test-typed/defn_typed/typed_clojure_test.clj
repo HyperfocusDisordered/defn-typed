@@ -31,26 +31,32 @@
                       (check-form! {:ns 'defn-typed.typed-bugs :form form :file fixture}))]))))
 
 (def planted
-  "The first line of the one error each planted bug gets."
-  {'[defn bug-arg-type]            "Function cover-of could not be applied to arguments:"
-   '[defn bug-return-use]          "Function inc could not be applied to arguments:"
-   '[defn bug-nested-field]        "Function zip-of could not be applied to arguments:"
-   '[defn bug-returned-field-arg]  "Function cover-of could not be applied to arguments:"
-   '[defn bug-returned-field-use]  "Function inc could not be applied to arguments:"
-   '[defn bug-nested-built-apart]  "Function zip-of could not be applied to arguments:"
-   '[defn bug-item-type]           "Function cart-total could not be applied to arguments:"
-   '[defn-typed lot-count]         "Type mismatch:"})
+  "The first line of the one error each planted bug gets and its :kind: a call of a defn-typed
+   function = `input of <f>: `, a defn-typed body against its output = `output of <f>: `, the
+   checker's own text after it; any other error keeps the checker's text."
+  {'[defn bug-arg-type]            ["input of cover-of: Function cover-of could not be applied to arguments:" :input]
+   '[defn bug-return-use]          ["Function inc could not be applied to arguments:" nil]
+   '[defn bug-nested-field]        ["input of zip-of: Function zip-of could not be applied to arguments:" :input]
+   '[defn bug-returned-field-arg]  ["input of cover-of: Function cover-of could not be applied to arguments:" :input]
+   '[defn bug-returned-field-use]  ["Function inc could not be applied to arguments:" nil]
+   '[defn bug-nested-built-apart]  ["input of zip-of: Function zip-of could not be applied to arguments:" :input]
+   '[defn bug-item-type]           ["input of cart-total: Function cart-total could not be applied to arguments:" :input]
+   '[defn-typed lot-count]         ["output of lot-count: Type mismatch:" :output]
+   '[defn bug-wrong-typed-key]     ["input of label-of: Function label-of could not be applied to arguments:" :input]
+   '[defn bug-misspelled-key]      ["input of label-of: Function label-of could not be applied to arguments:" :input]
+   '[defn-typed name-length]       ["output of name-length: Type mismatch:" :output]
+   '[defn-typed bumped-name]       ["Function inc could not be applied to arguments:" nil]})
 
 (deftest install-annotates-every-defn-typed-function
   ;; 2 defn-typed.core vars; per function its -props, plus --positional when the body is there
   ;; (countdown recurs to itself: its body stays in the var, which typed.malli's provider types)
-  (is (= (+ 2 (* 2 7) 1) @installed)))
+  (is (= (+ 2 (* 2 9) 1) @installed)))
 
 (deftest the-planted-bugs-are-reported
-  (doseq [[form message] planted]
+  (doseq [[form [message kind]] planted]
     (testing (str form)
-      (is (= [[message true]]
-             (mapv (juxt :message :defn-typed?) (get @findings form))))
+      (is (= [[message kind true]]
+             (mapv (juxt :message :kind :defn-typed?) (get @findings form))))
       (is (every? #(and (= fixture (:file %)) (pos-int? (:line %))) (get @findings form))))))
 
 (deftest every-other-form-is-clean

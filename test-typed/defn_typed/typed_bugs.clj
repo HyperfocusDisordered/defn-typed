@@ -120,3 +120,29 @@
 (defn-typed lot-count {:label :string} -> :int
   (str label)
 )
+
+(defn bug-wrong-typed-key
+  "A literal call whose key holds the wrong type (:name wants :string)."
+  []
+  (label-of {:name 1}))
+
+(defn bug-misspelled-key
+  "A literal call with a misspelled key (:nmae for :name)."
+  []
+  (label-of {:nmae "a"}))
+
+(defmeta name-length
+  {:doc "A name's length, promised as a :string."})
+
+;; bug-body-type: the body returns an integer where the signature promises :string
+(defn-typed name-length {:name :string} -> :string
+  (count name)
+)
+
+(defmeta bumped-name
+  {:doc "A name bumped by one: inc on a :string row."})
+
+;; bug-body-internal: a call inside the body gets the wrong type, not about the output
+(defn-typed bumped-name {:name :string} -> :string
+  (str (inc name))
+)
