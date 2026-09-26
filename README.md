@@ -7,6 +7,121 @@
 Typed functions for Clojure: one signature gives you static checks, runtime contracts,
 compile-time literal checks and example tests, and a call costs what a positional call costs.
 
+## Examples
+
+### Micro — `fizzbuzz`
+
+<!-- readme-test -->
+```clojure
+(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
+
+(defmeta fizzbuzz
+  {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
+   :inout-tests [[{:n 1}  "1"]
+                 [{:n 3}  "Fizz"]
+                 [{:n 5}  "Buzz"]
+                 [{:n 15} "FizzBuzz"]
+                 [{:n 7}  "7"]]})
+
+(defn-typed fizzbuzz {:n :int} -> :string
+  (cond (zero? (mod n 15)) "FizzBuzz"
+        (zero? (mod n 3))  "Fizz"
+        (zero? (mod n 5))  "Buzz"
+        :else              (str n))
+)
+
+(fizzbuzz {:n 15}) ;=> "FizzBuzz"
+```
+
+Under this form:
+
+- As you type, clj-kondo rejects a string input: `should be an integer`.
+- With instrumentation, the same call throws: `should be an integer`.
+- In a release build, the literal call becomes `(fizzbuzz--positional 15)`; see [Zero-cost calls](#zero-cost-calls).
+- Typed Clojure rejects a numeric body for `-> :string`: `Type mismatch:`.
+
+### Defaults, ranges, docs, example tests — `order-total`
+
+<!-- readme-test -->
+```clojure
+(defmeta order-total
+  {:doc "Order total: price × qty, minus a percent discount."
+   :inout-tests [[{:price 100}                      100]
+                 [{:price 100 :qty 3}               300]
+                 [{:price 100 :qty 3 :discount 10}  270]]})
+
+(defn-typed order-total {
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+  (quot (* price qty (- 100 discount)) 100)
+)
+
+(order-total {:price 100}) ;=> 100
+(order-total {:price 100 :qty 3 :discount 10}) ;=> 270
+```
+
+Under this form:
+
+- Defaults fill at compile time: `:qty 1` and `:discount 0`.
+- A literal out-of-range call warns during the build: `:discount 150 — should be at most 100`.
+- The `[in out]` pairs run as tests: `{:cases 3, :failures []}`.
+- `(doc order-total)` shows `([{:keys [price qty discount]}])` and `Order total: price × qty, minus a percent discount.`.
+
+### Nested map — `line-total`
+
+<!-- readme-test -->
+```clojure
+(defmeta line-total
+  {:doc "Line total after the discount."
+   :inout-tests [[{:item {:price 100}} 100]
+                 [{:item {:price 100 :qty 2} :discount 50} 100]]})
+
+(defn-typed line-total {
+  :item     [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+  (quot (* (:price item) (:qty item) (- 100 discount)) 100)
+)
+
+(line-total {:item {:price 100}}) ;=> 100
+(line-total {:item {:price 100 :qty 2} :discount 50}) ;=> 100
+```
+
+Under this form:
+
+- The nested `:qty` default fills to `1`.
+- A literal wrong nested value warns with its key path: `:item :price "x" — should be an integer`.
+- clj-kondo flags the nested wrong type: `should be an integer`.
+- Nested values stay maps; only the outer map is argument syntax.
+
+### A real one — `invite-token-of`
+
+A real one, from the app this library was extracted from:
+
+<!-- readme-test -->
+```clojure
+(defmeta invite-token-of
+  {:doc "The invite token a link carries: ?invite=<token>, else the Telegram start parameter
+         invite-<token> (base64url, the only shape startapp accepts). nil when neither."
+   :inout-tests [[{:url-token "abc" :start-param nil} "abc"]
+                 [{:url-token "abc" :start-param "invite-other"} "abc"]
+                 [{:url-token nil :start-param "invite-Xy_9-z"} "Xy_9-z"]
+                 [{:url-token "" :start-param "bid-1-2"} nil]
+                 [{:url-token nil :start-param nil} nil]]})
+
+(defn-typed invite-token-of {
+  :url-token   [:maybe :string]
+  :start-param [:maybe :string]
+} -> [:maybe :string]
+  (or (not-empty url-token)
+      (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param ""))))
+)
+```
+
+The four blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
+
 ## Why
 
 Most languages give you one familiar shape for a typed function: name, inputs with their types,
@@ -37,16 +152,16 @@ Python
 def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 ```
 
-Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
-ways to get there have an API no human wants to read next to their code. defn-typed gives you that
-shape, and builds everything else from the one signature:
+Clojure has no such form. The checkers exist: clj-kondo, Typed Clojure and malli check keys, types
+and values well, but each wants its own description written apart from the function. defn-typed
+gives you the familiar shape once and hands each tool its own form of it:
 
 - **static checks**: clj-kondo flags wrong keys and types as you type (see Static checking);
 - **type checking** (optional, clj): Typed Clojure checks bodies and call sites against the same
   signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
 - **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
   during the build (see Compile-time literal checks);
-- **runtime contracts**: every call is checked in the REPL and in tests;
+- **runtime contracts**: malli checks every call in the REPL and in tests;
 - **example tests**: the `[in out]` pairs above the function run as tests;
 - **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
   as a plain `defn` (see Zero-cost calls).
@@ -235,121 +350,6 @@ Timing: about 17 ms per form on a warm JVM (an application namespace); the fixtu
 121 ms together (median 5 ms, slowest 23 ms). Check form by form, each with a deadline: over a very
 large namespace, a whole-file `check-ns` may exhaust the checker's stack, and a checker thread that
 runs away cannot be stopped, only abandoned (restart the JVM).
-
-## Examples
-
-### Micro — `fizzbuzz`
-
-<!-- readme-test -->
-```clojure
-(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
-
-(defmeta fizzbuzz
-  {:doc "FizzBuzz: 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 'FizzBuzz' for both, else the number as a string."
-   :inout-tests [[{:n 1}  "1"]
-                 [{:n 3}  "Fizz"]
-                 [{:n 5}  "Buzz"]
-                 [{:n 15} "FizzBuzz"]
-                 [{:n 7}  "7"]]})
-
-(defn-typed fizzbuzz {:n :int} -> :string
-  (cond (zero? (mod n 15)) "FizzBuzz"
-        (zero? (mod n 3))  "Fizz"
-        (zero? (mod n 5))  "Buzz"
-        :else              (str n))
-)
-
-(fizzbuzz {:n 15}) ;=> "FizzBuzz"
-```
-
-Under this form:
-
-- As you type, clj-kondo rejects a string input: `should be an integer`.
-- With instrumentation, the same call throws: `should be an integer`.
-- In a release build, the literal call becomes `(fizzbuzz--positional 15)`; see [Zero-cost calls](#zero-cost-calls).
-- Typed Clojure rejects a numeric body for `-> :string`: `Type mismatch:`.
-
-### Defaults, ranges, docs, example tests — `order-total`
-
-<!-- readme-test -->
-```clojure
-(defmeta order-total
-  {:doc "Order total: price × qty, minus a percent discount."
-   :inout-tests [[{:price 100}                      100]
-                 [{:price 100 :qty 3}               300]
-                 [{:price 100 :qty 3 :discount 10}  270]]})
-
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-  (quot (* price qty (- 100 discount)) 100)
-)
-
-(order-total {:price 100}) ;=> 100
-(order-total {:price 100 :qty 3 :discount 10}) ;=> 270
-```
-
-Under this form:
-
-- Defaults fill at compile time: `:qty 1` and `:discount 0`.
-- A literal out-of-range call warns during the build: `:discount 150 — should be at most 100`.
-- The `[in out]` pairs run as tests: `{:cases 3, :failures []}`.
-- `(doc order-total)` shows `([{:keys [price qty discount]}])` and `Order total: price × qty, minus a percent discount.`.
-
-### Nested map — `line-total`
-
-<!-- readme-test -->
-```clojure
-(defmeta line-total
-  {:doc "Line total after the discount."
-   :inout-tests [[{:item {:price 100}} 100]
-                 [{:item {:price 100 :qty 2} :discount 50} 100]]})
-
-(defn-typed line-total {
-  :item     [:map [:price [:int {:min 1}]] [:qty [:int {:min 1 :default 1}]]]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-  (quot (* (:price item) (:qty item) (- 100 discount)) 100)
-)
-
-(line-total {:item {:price 100}}) ;=> 100
-(line-total {:item {:price 100 :qty 2} :discount 50}) ;=> 100
-```
-
-Under this form:
-
-- The nested `:qty` default fills to `1`.
-- A literal wrong nested value warns with its key path: `:item :price "x" — should be an integer`.
-- clj-kondo flags the nested wrong type: `should be an integer`.
-- Nested values stay maps; only the outer map is argument syntax.
-
-### A real one — `invite-token-of`
-
-A real one, from the app this library was extracted from:
-
-<!-- readme-test -->
-```clojure
-(defmeta invite-token-of
-  {:doc "The invite token a link carries: ?invite=<token>, else the Telegram start parameter
-         invite-<token> (base64url, the only shape startapp accepts). nil when neither."
-   :inout-tests [[{:url-token "abc" :start-param nil} "abc"]
-                 [{:url-token "abc" :start-param "invite-other"} "abc"]
-                 [{:url-token nil :start-param "invite-Xy_9-z"} "Xy_9-z"]
-                 [{:url-token "" :start-param "bid-1-2"} nil]
-                 [{:url-token nil :start-param nil} nil]]})
-
-(defn-typed invite-token-of {
-  :url-token   [:maybe :string]
-  :start-param [:maybe :string]
-} -> [:maybe :string]
-  (or (not-empty url-token)
-      (second (re-matches #"invite-([A-Za-z0-9_-]+)" (or start-param ""))))
-)
-```
-
-The four blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
 
 ## Syntax
 
