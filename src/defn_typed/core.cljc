@@ -522,8 +522,9 @@
    (defn- install-cljs-expander!
      "Makes `name` a macro for the cljs analyzer, beside the fn of that name: interned in the clj
       namespace of the same name (where the analyzer looks up `alias/name` and `ns/name`) and
-      recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns). Value
-      position keeps resolving the fn. Called in a release (`:advanced`) build only: a cached
+      recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns) and among
+      its analyzed `:macros` (so a namespace that `:refer`s name gets it into its `:use-macros`,
+      shadow-cljs infer-macro-use). Value position keeps resolving the fn. Called in a release (`:advanced`) build only: a cached
       analysis holding that `:use-macros` entry needs the clj macro ns, which a fresh JVM lacks, so
       shadow-cljs recompiles such a ns on every build; a dev build keeps its cache and plain calls. A clj var of that name that is not such an expander (a
       .cljc loaded on the JVM) stays untouched: that fn then has no expander."
@@ -544,7 +545,12 @@
                              form)))]
            (.setMacro ^clojure.lang.Var v)
            (swap! @(resolve 'cljs.env/*compiler*)
-                  assoc-in [:cljs.analyzer/namespaces ns-sym :use-macros fn-name] ns-sym))))))
+                  update-in [:cljs.analyzer/namespaces ns-sym]
+                  #(-> %
+                       (assoc-in [:use-macros fn-name] ns-sym)
+                       ;; the ns's analyzed macros: a namespace compiled later that `:refer`s name
+                       ;; gets it as a macro too (shadow-cljs infer-macro-use reads this map)
+                       (assoc-in [:macros fn-name] {:name (symbol (str ns-sym) (str fn-name)) :ns ns-sym :macro true}))))))))
 
 #?(:clj
    (defmacro defn-typed
