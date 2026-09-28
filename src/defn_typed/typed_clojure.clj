@@ -34,14 +34,18 @@
   (s->t/malli->type (m/schema schema) {::s->t/mode :validator-type}))
 
 (defn- defn-typed-fn
-  "{:name :props :out} of the var v when it is a defn-typed function (a `<name>-props` var beside
-   it and a `:malli/schema` of one map argument), else nil."
+  "{:name :props :out :positional :body} of the var v when it is a defn-typed function (a
+   `<name>-props` var beside it and a `:malli/schema` of one map argument), else nil; :positional /
+   :body = the symbol of `<name>--positional` / `<name>--body` where the body lives, nil when absent."
   [v]
   (let [sym (symbol v)
         schema (:malli/schema (meta v))
-        props-var (resolve (symbol (namespace sym) (str (name sym) "-props")))]
+        sibling #(resolve (symbol (namespace sym) (str (name sym) %)))
+        props-var (sibling "-props")]
     (when (and props-var (vector? schema) (= :=> (first schema)))
-      {:name sym :props @props-var :out (peek schema)})))
+      {:name sym :props @props-var :out (peek schema)
+       :positional (some-> (sibling "--positional") symbol)
+       :body (some-> (sibling "--body") symbol)})))
 
 (defn- required-if-default
   "row without `:optional` when its type carries `:default` in its own props: the body sees the
@@ -57,24 +61,21 @@
    body fn `<name>--positional` (the rows' types in entry order, a row optional without a default
    nilable, typed as the body sees them: every defaulted key present, at any depth) or
    `<name>--body` (the map), each returning the output's type."
-  [{:keys [name props out]}]
-  (let [sibling #(symbol (namespace name) (str (clojure.core/name name) %))
-        filled (walk-rows required-if-default props)
+  [{:keys [name props out positional body]}]
+  (let [filled (walk-rows required-if-default props)
         rows (m/children (m/schema filled))
         row-types (for [[_ entry-props schema] rows
                         :let [row-type (type-of schema)]]
                     (if (:optional entry-props)
                       `(t/Nilable ~row-type)
                       row-type))
-        positional (resolve (sibling "--positional"))
-        body (resolve (sibling "--body"))
         params (cond
                  positional (vec row-types)
                  body [(type-of props)]
                  ;; the body is in name itself, which the provider types
                  :else nil)]
-    (cond-> [`(t/ann ~(sibling "-props") t/Any)]
-      params (conj `(t/ann ~(symbol (or positional body)) ~(conj params :-> (type-of out)))))))
+    (cond-> [`(t/ann ~(symbol (namespace name) (str (clojure.core/name name) "-props")) t/Any)]
+      params (conj `(t/ann ~(or positional body) ~(conj params :-> (type-of out)))))))
 
 (defn- defn-typed-fns
   "defn-typed-fn of every var interned in ns-sym that is a defn-typed function, sorted by name."
@@ -154,22 +155,46 @@
   (and (seq? form) (contains? #{#'defn-typed #'defnt} (try (ns-resolve ns-sym (first form)) (catch Exception _ nil)))))
 
 (defn- labelled
-  "{:message :kind} of the checker's message for an error in form of ns-sym: a call of a defn-typed
-   function it could not apply (`Function <f> could not be applied…`, f resolving in ns-sym to a
-   defn-typed function) = `input of <f>: ` before the message, :input; a `Type mismatch:` in a
-   `(defn-typed <f> …)` / `(defnt <f> …)` form = `output of <f>: `, :output; anything else = the message, nil."
-  [ns-sym form message]
-  (let [[_ applied] (re-find #"^Function (\S+) could not be applied" message)
-        applied-var (when applied (try (ns-resolve ns-sym (symbol applied)) (catch Exception _ nil)))]
+  "{:message :kind} of the checker's `message` for an error in `form`: a call of a defn-typed
+   function it could not apply (`Function <f> could not be applied…`, `defn-typed-fn?` true of the
+   symbol f) = `input of <f>: ` before the message, :input; a `Type mismatch:` in a
+   `(defn-typed <f> …)` / `(defnt <f> …)` form (`in-defn-typed?`) = `output of <f>: `, :output;
+   anything else = the message, nil."
+  [{:keys [form message defn-typed-fn? in-defn-typed?]}]
+  (let [[_ applied] (re-find #"^Function (\S+) could not be applied" message)]
     (cond
-      (and (var? applied-var) (defn-typed-fn applied-var))
+      (and applied (defn-typed-fn? (symbol applied)))
       {:message (str "input of " applied ": " message) :kind :input}
 
-      (and (str/starts-with? message "Type mismatch:") (defn-typed-form? ns-sym form))
+      (and (str/starts-with? message "Type mismatch:") in-defn-typed?)
       {:message (str "output of " (second form) ": " message) :kind :output}
 
       ;; an error that is neither: the checker's text as it is
       :else {:message message :kind nil})))
+
+(defn- findings
+  "The findings of check-form! / check-cljs-form! from the checker's `result` for `form`
+   (check-form-info's map, or {:ex e} when it threw): `defn-typed-fn?` / `defn-typed-var?` tell
+   whether a symbol, as written in form's namespace, names a defn-typed function / one or its
+   `<name>--positional` / `<name>--body`; `in-defn-typed?` whether form is a `(defn-typed …)` /
+   `(defnt …)` form."
+  [{:keys [result form defn-typed-fn? defn-typed-var? in-defn-typed?]}]
+  (let [errors (concat (:delayed-errors result)
+                       (when-let [e (:ex result)]
+                         (or (seq (:errors (ex-data e))) [e])))]
+    (mapv (fn [e]
+            (let [{:keys [env] error-form :form} (ex-data e)]
+              (merge {:file (:file env)
+                      :line (:line env)
+                      :column (:column env)}
+                     (labelled {:form form
+                                :message (str/trim (or (ex-message e) (str (class e))))
+                                :defn-typed-fn? defn-typed-fn?
+                                :in-defn-typed? in-defn-typed?})
+                     {:defn-typed? (boolean (or in-defn-typed?
+                                                (some #(and (symbol? %) (defn-typed-var? %))
+                                                      (tree-seq coll? seq error-form))))})))
+          errors)))
 
 (defmeta check-form!
   {:doc "Type-checks one top-level `form` of the namespace `ns` (loaded, `install!`ed) without
@@ -196,18 +221,11 @@
                          *out* out
                          *err* out]
                  (try (checker/check-form-info form :check-config {:check-form-eval :never})
-                      (catch Throwable e {:ex e})))
-        errors (concat (:delayed-errors result)
-                       (when-let [e (:ex result)]
-                         (or (seq (:errors (ex-data e))) [e])))
-        in-defn-typed? (defn-typed-form? ns form)]
-    (mapv (fn [e]
-            (let [{:keys [env] error-form :form} (ex-data e)]
-              (merge {:file (:file env)
-                      :line (:line env)
-                      :column (:column env)}
-                     (labelled ns form (str/trim (or (ex-message e) (str (class e)))))
-                     {:defn-typed? (boolean (or in-defn-typed?
-                                                (some #(defn-typed-var? ns %) (tree-seq coll? seq error-form))))})))
-          errors))
+                      (catch Throwable e {:ex e})))]
+    (findings {:result result
+               :form form
+               :defn-typed-fn? #(let [v (try (ns-resolve ns %) (catch Exception _ nil))]
+                                  (boolean (and (var? v) (defn-typed-fn v))))
+               :defn-typed-var? #(defn-typed-var? ns %)
+               :in-defn-typed? (defn-typed-form? ns form)}))
 )
