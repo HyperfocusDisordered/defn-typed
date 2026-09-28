@@ -1,3 +1,7 @@
 {:hooks {:analyze-call {defn-typed.core/defn-typed hooks.defn-typed/defn-typed
                         defn-typed.core/defnt hooks.defn-typed/defn-typed
-                        defn-typed.core/defmeta hooks.defn-typed/defmeta}}}
+                        defn-typed.core/defmeta hooks.defn-typed/defmeta}}
+ ;; clojure-lsp reports <name>-props and <name>--positional as unused public vars although the
+ ;; expansion uses both; a var a hook defines carries :defined-by clojure.core/def(n), so
+ ;; :exclude-when-defined-by cannot select them
+ :linters {:clojure-lsp/unused-public-var {:exclude-regex #{".*-props$" ".*--positional$"}}}}
