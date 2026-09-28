@@ -550,8 +550,11 @@ in clj and in a cljs release build.
 The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed/`; step 1 of
 [Static checking](#static-checking) copies them to `.clj-kondo/imports/io.github.hyperfocusdisordered/defn-typed/`, which clj-kondo loads with no
 further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
-arrow and the body as the `def` + `defn` above, with the row keys as locals, and reports the same
-shape errors as the macro; the `defmeta` hook lints the map as code.
+arrow and the body as the `def` and the two `defn`s above, with the row keys as locals, so a direct
+`name--positional` call resolves and its arity is checked, and reports the same shape errors as the
+macro; the `defmeta` hook lints the map as code. The exported config keeps clojure-lsp from
+reporting `name-props` and `name--positional` as unused public vars (checked with clojure-lsp
+2026.07.06).
 
 ## Running the examples
 
