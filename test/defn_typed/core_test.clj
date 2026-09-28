@@ -263,14 +263,15 @@
 
 (defn- hook-findings
   "[row message] of each clj-kondo finding for code (a refer the snippet leaves unused, row 1, not
-   included), linted with the exported hooks only."
-  [code]
-  (->> (with-in-str (str "(ns k (:require [defn-typed.core :refer [defn-typed defnt defmeta]]))\n" code)
-         (kondo/run! {:lint ["-"] :lang :clj :cache false
-                      :config-dir "resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed"}))
-       :findings
-       (remove #(= 1 (:row %)))
-       (mapv (juxt :row :message))))
+   included), linted with the exported hooks only; with fields, (fields finding) of each."
+  ([code] (hook-findings code (juxt :row :message)))
+  ([code fields]
+   (->> (with-in-str (str "(ns k (:require [defn-typed.core :refer [defn-typed defnt defmeta]]))\n" code)
+          (kondo/run! {:lint ["-"] :lang :clj :cache false
+                       :config-dir "resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed"}))
+        :findings
+        (remove #(= 1 (:row %)))
+        (mapv fields))))
 
 (deftest malformed-forms
   (testing "the clj-kondo hook reports a malformed form as a finding naming the problem, and the file's other findings stay"
@@ -347,6 +348,44 @@
       (let [typed (hook-findings (format form "defn-typed"))]
         (is (seq typed) form)
         (is (= typed (hook-findings (format form "defnt"))) form)))))
+
+(def ^:private order-fixture
+  "Namespace k (after hook-findings' ns line): a defn-typed under its defmeta whose body leaves
+   :discount unread, and one whose recur targets the function; then namespace k2 calling the first
+   with a map and positionally."
+  (str/join "\n" ["(defmeta order-total"
+                  "  {:doc \"Order total.\""
+                  "   :inout-tests [[{:price 100} 100]]})"
+                  ""
+                  "(defn-typed order-total {"
+                  "  :price    :int"
+                  "  :qty      [:int {:default 1}]"
+                  "  :discount [:int {:default 0}]"
+                  "} -> :int"
+                  "  (* price qty)"
+                  ")"
+                  ""
+                  "(defn-typed countdown {:n :int :acc :int} -> :int"
+                  "  (if (pos? n) (recur {:n (dec n) :acc (inc acc)}) acc)"
+                  ")"
+                  ""
+                  "(ns k2 (:require [k :refer [order-total order-total--positional countdown]]))"
+                  "[(order-total {:price 100 :qty 2}) (order-total--positional 100 2 0) (countdown {:n 3 :acc 0})]"]))
+
+(deftest kondo-hook-lints-the-expansion
+  (testing "the exported hooks define <name>-props, name and <name>--positional: a positional call from another namespace resolves; an unread row and a (recur {…}) in a body kept in name report nothing"
+    (is (= [] (hook-findings order-fixture))))
+  (testing "a positional call with the wrong arity is one :invalid-arity finding"
+    (is (= [[20 :invalid-arity "k/order-total--positional is called with 1 arg but expects 3"]]
+           (hook-findings (str order-fixture "\n(order-total--positional 100)") (juxt :row :type :message)))))
+  (testing "20 rows define <name>--positional; more keep the body in name, as the macro does: no positional var"
+    (let [table #(str "{" (str/join " " (map (fn [i] (str ":a" i " :int")) (range 1 (inc %)))) "}")]
+      (is (= [[3 :invalid-arity "k/narrow--positional is called with 1 arg but expects 20"]]
+             (hook-findings (str "(defn-typed narrow " (table 20) " -> :int a1)\n(narrow--positional 1)")
+                            (juxt :row :type :message))))
+      (is (= [[3 :unresolved-symbol "Unresolved symbol: wide--positional"]]
+             (hook-findings (str "(defn-typed wide " (table 21) " -> :int a1)\n(wide--positional 1)")
+                            (juxt :row :type :message)))))))
 
 (deftest cljs-expander-decides-per-compile
   (testing "a JVM that ran a release (the expander interned) and then compiles in dev: the dev call is the plain call, no check, no rewrite"

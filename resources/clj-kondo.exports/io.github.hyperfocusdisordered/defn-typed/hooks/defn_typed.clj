@@ -1,7 +1,10 @@
 (ns hooks.defn-typed
   "clj-kondo hooks for defn-typed.core. defn-typed: rewrites
-   (defn-typed name {key schema …} -> <out-schema> body…) into the def + defn it expands to,
-   the row keys bound as locals, so the name, the schemas and the body lint like any defn. defmeta
+   (defn-typed name {key schema …} -> <out-schema> body…) into the vars it expands to:
+   (def <name>-props [:map …]), (defn name [m] (let [{:keys [k…]} m] (<name>--positional k…))) and
+   (defn <name>--positional [k…] body…), the row keys bound as locals, so the name, the schemas, the
+   body and a direct positional call lint like any defn; a table of more than 20 rows or a body
+   whose recur targets the function keeps the body in name, as the macro does. defmeta
    (written above the function): rewrites (defmeta name {…}) into (do (declare name) {…}), as the
    macro declares it, so every symbol inside the map (the :inout-tests pairs included) is resolved
    like any other code."
@@ -43,6 +46,23 @@
 
       ;; any other schema holds no rows
       :else nil)))
+
+(defn- self-recur?
+  "Mirrors defn-typed.core/self-recur? on the written body: whether node holds a `recur` whose
+   target is the enclosing function, one outside a nested loop, fn (`#(…)` included) or letfn
+   binding, and outside a quote."
+  [node]
+  (let [children (:children node)
+        head (when (api/list-node? node)
+               (let [h (first children)
+                     s (when (and h (api/token-node? h)) (api/sexpr h))]
+                 (when (symbol? s) (symbol (name s)))))]
+    (cond
+      (and (api/token-node? node) (= 'recur (api/sexpr node))) true
+      (#{:quote :syntax-quote :fn} (api/tag node)) false
+      ('#{loop loop* fn fn* quote} head) false
+      (= 'letfn head) (boolean (some self-recur? (nnext children)))
+      :else (boolean (some self-recur? children)))))
 
 (defn- name-node?
   "Whether node is a symbol token: the function's name."
@@ -107,28 +127,52 @@
       :else nil)
     (when (arg-vector? body)
       (finding! (first body) "args are bound from the rows: drop the argument vector"))
-    {:node (with-meta
-             (api/list-node
-               [(api/token-node 'do)
-                (api/list-node [(api/token-node 'def) props
-                                (api/vector-node (concat [(api/keyword-node :map)]
-                                                         (if table? rows input)))])
-                (api/list-node
-                  (concat [(api/token-node 'defn) fn-name]
-                          (when doc [doc])
-                          [(api/map-node [(api/keyword-node :malli/schema)
-                                          (api/vector-node [(api/keyword-node :=>)
-                                                            (api/vector-node [(api/keyword-node :cat) props])
-                                                            ;; no output schema (-> missing, or nothing after it) is reported above; a nil node would abort the file's analysis
-                                                            (or out-schema (api/keyword-node :any))])])
-                           (api/vector-node [m])
-                           (api/list-node
-                             (concat [(api/token-node 'let)
-                                      (api/vector-node [(api/map-node [(api/keyword-node :keys) (api/vector-node locals)])
-                                                        m
-                                                        (api/token-node '_) (api/vector-node locals)])]
-                                     body))]))])
-             (meta node))}))
+    (let [positional (api/token-node (symbol (str (api/sexpr fn-name) "--positional")))
+          ;; the macro's condition for <name>--positional: at most 20 rows and no recur targeting the
+          ;; function. The hook sees the body unexpanded, so a recur a user macro produces is invisible
+          ;; here: it emits <name>--positional where the macro keeps the body in name. Two keys binding
+          ;; one local (reported above; the macro expands to nothing) keep the body in name too, which
+          ;; reports no second finding for them.
+          positional? (and (<= (count locals) 20)
+                           (= (count locals) (count (set (map api/sexpr locals))))
+                           (not-any? self-recur? body))
+          ;; a form of the expansion, located at the defn-typed call: clj-kondo gives an unlocated list
+          ;; the location of the last located list before it (a row's schema, the body)
+          form #(with-meta (api/list-node %) (meta node))
+          defn-name (fn [call]
+                      (form
+                        (concat [(api/token-node 'defn) fn-name]
+                                (when doc [doc])
+                                [(api/map-node [(api/keyword-node :malli/schema)
+                                                (api/vector-node [(api/keyword-node :=>)
+                                                                  (api/vector-node [(api/keyword-node :cat) props])
+                                                                  ;; no output schema (-> missing, or nothing after it) is reported above; a nil node would abort the file's analysis
+                                                                  (or out-schema (api/keyword-node :any))])
+                                                (api/keyword-node :arglists)
+                                                (api/list-node [(api/token-node 'quote)
+                                                                (api/list-node [(api/vector-node [(api/map-node [(api/keyword-node :keys) (api/vector-node locals)])])])])])
+                                 (api/vector-node [m])
+                                 call])))
+          body-let #(api/list-node (concat [(api/token-node 'let) (api/vector-node %)] body))
+          rows-of-m [(api/map-node [(api/keyword-node :keys) (api/vector-node locals)]) m]]
+      {:node (form
+               (concat
+                 [(api/token-node 'do)
+                  (form [(api/token-node 'def) props
+                         (api/vector-node (concat [(api/keyword-node :map)]
+                                                  (if table? rows input)))])]
+                 ;; name's defn before the positional one, so a body that calls name resolves it
+                 ;; without (declare name), which after the defmeta's is a redundant declare
+                 (if positional?
+                   [(form [(api/token-node 'declare) positional])
+                    (defn-name (api/list-node [(api/token-node 'let) (api/vector-node rows-of-m)
+                                               (api/list-node (cons positional locals))]))
+                    (form [(api/token-node 'defn) positional
+                           (api/map-node [(api/keyword-node :no-doc) (api/token-node true)])
+                           (api/vector-node locals)
+                           (body-let [(api/token-node '_) (api/vector-node locals)])])]
+                   ;; no positional fn (see positional?): the body stays in name
+                   [(defn-name (body-let (concat rows-of-m [(api/token-node '_) (api/vector-node locals)])))])))})))
 
 (defn defn-typed [{:keys [node]}]
   (if (nil? (second (:children node)))
