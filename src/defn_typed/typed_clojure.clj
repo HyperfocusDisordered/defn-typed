@@ -327,6 +327,9 @@
           ;; them makes it read the current source
           (swap! (cljs-compiler) update-in [:cljs.analyzer/namespaces ns-sym] dissoc :defs)
           ((cljs-var 'cljs.analyzer.api/analyze-file) ((cljs-var 'cljs.util/ns->source) ns-sym)))))
+    ;; t/ann expands to cljs.core.typed/ann, whose macro namespace the analyzer finds only once
+    ;; the JVM has loaded it; unloaded, the form analyzes as a call and registers nothing
+    (require 'cljs.core.typed)
     (let [forms (concat (for [ann lib-anns] ['defn-typed.core ann])
                         (for [{:keys [name props out] :as f} (cljs-defn-typed-fns @props-forms)
                               ann (cons `(t/ann ~name ~(type-of [:=> [:cat props] out])) (fn-anns f))]
@@ -358,7 +361,12 @@
                          *err* out]
                  (in-cljs-ns ns file
                              #(try ((cljs-var 'typed.cljs.checker/check-form-info) form :skip-cljs-analyzer-bindings true)
-                                   (catch Throwable e {:ex e}))))]
+                                   ;; check-form-info returns every Typed Clojure error: what it
+                                   ;; throws is a crash of the checker itself, one Internal Error
+                                   (catch Throwable e
+                                     (let [{:keys [line column]} (meta form)]
+                                       {:ex (ex-info (str "Internal Error (" file ":" line ") " (.getName (class e)) ": " (ex-message e))
+                                                     {:env {:file file :line line :column column}})})))))]
     (findings {:result result
                :form form
                :defn-typed-fn? #(boolean (some-> (resolve-in-ns %) cljs-defn-typed-name?))
