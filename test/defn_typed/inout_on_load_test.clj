@@ -64,7 +64,7 @@
                                            "(defn-typed halved {:n :int} -> :int"
                                            "  (quot 2 n)"
                                            ")"])]
-    (is (= [(str "WARNING " path ":2 inout-load.throws/halved in/out case 0: {:n 0} → expected 0, threw Divide by zero")]
+    (is (= [(str "WARNING " path ":2 inout-load.throws/halved in/out case 0: threw Divide by zero (expected 0) — input {:n 0}")]
            (str/split-lines err)))))
 
 (deftest error-fails-the-load
@@ -160,3 +160,28 @@
               (str head "5: expected 5, got 6 — input {:got 6}")
               (str head "6: [:items] expected [1 2], got [1 3] — input {:got {:items [1 3]}}")]
              (str/split-lines err))))))
+
+(deftest assert-cases-carries-the-warning-line
+  (testing "a failing or throwing case's clojure.test message is the on-load warning's text (its locus = the var's); a passing case reports :pass without a message"
+    (let [source ["(defmeta f"
+                  " {:inout-tests [[{:n 2} 5]"
+                  "                [{:n 0} 0]"
+                  "                [{:n 3} 6]]})"
+                  ""
+                  "(defn-typed f {:n :int} -> :int"
+                  "  (* 3 (quot 6 n))"
+                  ")"]
+          {:keys [path err]} (with-property nil #(load-source! 'inout-load.assert source :keep))
+          reports (atom [])]
+      (try
+        (with-redefs [clojure.test/report #(swap! reports conj (select-keys % [:type :message]))]
+          ((requiring-resolve 'defn-typed.core/assert-cases) (resolve 'inout-load.assert/f)))
+        (let [no-locus #(str/replace-first % #"^\S+:\d+ " "")
+              warned (mapv (comp no-locus #(str/replace-first % "WARNING " "")) (str/split-lines err))]
+          (is (= ["inout-load.assert/f in/out case 0: expected 5, got 9 — input {:n 2}"
+                  "inout-load.assert/f in/out case 1: threw Divide by zero (expected 0) — input {:n 0}"]
+                 warned))
+          (is (= [:fail :error :pass] (mapv :type @reports)))
+          (is (= warned (mapv (comp no-locus :message) (take 2 @reports))))
+          (is (= path (second (re-find #"^(\S+):\d+ " (:message (first @reports)))))))
+        (finally (remove-ns 'inout-load.assert))))))

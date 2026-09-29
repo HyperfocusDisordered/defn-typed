@@ -56,4 +56,10 @@
   got
 )
 
+(defmeta halve {:inout-tests [[{:n 0} 0]]})
+
+(defn-typed halve {:n :int} -> :int
+  (throw (js/Error. "Divide by zero"))
+)
+
 (set! js/console.error console-error)

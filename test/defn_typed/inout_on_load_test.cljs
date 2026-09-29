@@ -15,7 +15,7 @@
     (is (= [["12" "defn-typed.inout-on-load-fixture/tripled" "1" "expected 5, got 6 — input {:n 2}"]
             ["30" "defn-typed.inout-on-load-fixture/below" "0" "expected 5, got 6 — input {:n 2}"]]
            (into [] (comp (map #(vec (rest (re-find #"^WARNING .*inout_on_load_fixture\.cljs:(\d+) (\S+) in/out case (\d+): (.*)$" %))))
-                          (remove #(re-find #"/pick$" (second %))))
+                          (remove #(re-find #"/(pick|halve)$" (second %))))
                  @fixture/printed)))))
 
 (deftest mismatch-names-what-differs
@@ -32,3 +32,7 @@
   (is (= "f.cljs:12 defn-typed.inout-on-load-fixture/tripled in/out case 1: expected 5, got 6 — input {:n 2}"
          (try (core/inout-check! {:var #'fixture/tripled :mode :error :file "f.cljs" :line 12}) nil
               (catch :default e (ex-message e))))))
+
+(deftest throwing-case-names-the-exception-first
+  (is (= ["in/out case 0: threw Divide by zero (expected 0) — input {:n 0}"]
+         (printed-lines "halve"))))

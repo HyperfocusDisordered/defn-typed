@@ -1870,12 +1870,12 @@
 (defn- case-text
   "`<file>:<line> <ns/f> in/out case <i>: <differences> — input <in>` for a failing case
    (run-case's result; case-difference names the key paths that differ); a throwing one reads
-   `<in> → expected <out>, threw <message>`."
+   `<file>:<line> <ns/f> in/out case <i>: threw <message> (expected <out>) — input <in>`."
   [{:keys [file line f result]}]
   (let [{:keys [i in expected actual]} result
         head (str file ":" line " " f " in/out case " i ": ")]
     (if (contains? result ::thrown)
-      (str head (pr-str (shown-in in)) " → expected " (pr-str expected) ", threw " (second actual))
+      (str head "threw " (second actual) " (expected " (pr-str expected) ") — input " (pr-str (shown-in in)))
       (str head (case-difference expected actual) " — input " (pr-str (shown-in in))))))
 
 (defn- report-cases!
@@ -1965,7 +1965,7 @@
    {:var :mode :file :line :pending}: runs the var's cases, the ones check-var runs, and
    reports each failing one as mode (`:inout-check`, never `:off`: no call is emitted then) says:
    `:warn` prints `WARNING <file>:<line> <ns/f> in/out case <i>: [:k] expected <x>, got <y> — input
-   <in>` (case-difference; a throwing case `<in> → expected <out>, threw <message>`), `:error`
+   <in>` (case-difference; a throwing case `threw <message> (expected <out>) — input <in>`), `:error`
    throws that text. All passing: nothing. A case calling a
    function defined further down waits for it (inout-run!). Replaces the waiting cases of the
    function's previous definition. Returns the var."
@@ -1994,19 +1994,22 @@
 
 #?(:clj
    (defn assert-cases
-     "One clojure.test assertion per case of v. A throwing case reports an error naming the case
-      (and, for a malli rejection, the failing keys) and the next case still runs."
+     "One clojure.test assertion per case of v, a failing one carrying the text the on-load warning
+      prints for it (case-text, at the var's `:file` and `:line`). A throwing case reports an error
+      (and, for a malli rejection, the failing keys after that text) and the next case still runs."
      [v]
-     (doseq [[i args expected] (var-cases v)]
-       (let [label (str (var-name v) " case " i " in=" (pr-str (shown-in args)))
-             [actual thrown] (try [(apply @v args) nil] (catch Throwable e [nil e]))]
-         (if thrown
+     (doseq [[_ _ expected :as c] (var-cases v)]
+       (let [{:keys [actual] :as result} (run-case v c)
+             text #(case-text {:file (:file (meta v)) :line (:line (meta v)) :f (var-name v) :result result})]
+         (cond
+           (contains? result ::thrown)
            (test/do-report
-            {:type :error :expected expected :actual thrown
-             :message (apply str label
-                             (for [reason (some-> (malli-fns) (malli-reasons (ex-data thrown)))]
+            {:type :error :expected expected :actual (::thrown result)
+             :message (apply str (text)
+                             (for [reason (some-> (malli-fns) (malli-reasons (ex-data (::thrown result))))]
                                (str "\n  " reason)))})
-           (test/is (= expected actual) label))))))
+           (failed? result) (test/is (= expected actual) (text))
+           :else (test/is (= expected actual)))))))
 
 #?(:clj
    (defn deftests!
