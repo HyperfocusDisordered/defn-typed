@@ -418,3 +418,72 @@
     (is (not-any? #(and (seq? %) (= 'defn-typed.core/typed-check! (first %)))
                   (macroexpand-1 '(defn-typed.core/defn-typed f {:n :int} -> :string n))))
     (is (nil? (find-ns 'defn-typed.typed-clojure)))))
+
+(defn- root-error
+  "[message ex-data] of the innermost cause of e."
+  [e]
+  (let [root (last (take-while some? (iterate ex-cause e)))]
+    [(ex-message root) (ex-data root)]))
+
+(defn- load-error
+  "root-error of loading source (the forms of namespace defn-typed.schema-cases, as a string) as the
+   file path, or nil when it loads; the namespace removed after."
+  [path source]
+  (try (clojure.lang.Compiler/load (java.io.StringReader. source) path (peek (str/split path #"/")))
+       nil
+       (catch Throwable e (root-error e))
+       (finally (remove-ns 'defn-typed.schema-cases))))
+
+(def ^:private cases-ns "(ns defn-typed.schema-cases (:require [defn-typed.core :refer [defn-typed]]))\n")
+
+(deftest invalid-schema-fails-the-definition
+  (testing "malli loaded: a row schema malli cannot build fails the file at expansion, one line: the function, the row, the unknown name and the nearest known one, malli's error key and data, file:line"
+    (let [thrown (try (require 'defn-typed.schema-typo) nil
+                      (catch Throwable e e))
+          [message data] (root-error thrown)]
+      (try
+        (is (= :macro-syntax-check (:clojure.error/phase (ex-data thrown))))
+        (is (= (str "defn-typed: defn-typed.schema-typo/order-total — invalid schema for :qty: unknown schema :it (did you mean :int?)"
+                    " — :malli.core/invalid-schema {:schema :it} (test/defn_typed/schema_typo.clj:11)")
+               message))
+        (is (= {:fn 'defn-typed.schema-typo/order-total :row :qty :schema [:it {:min 1 :default 1}]
+                :malli/error {:type :malli.core/invalid-schema :message :malli.core/invalid-schema
+                              :data {:schema :it :form [:it {:min 1 :default 1}]}}}
+               data))
+        (finally
+          (core/forget-ns! 'defn-typed.schema-typo)
+          (swap! @#'core/pending-meta dissoc 'defn-typed.schema-typo/order-total)
+          (remove-ns 'defn-typed.schema-typo)))))
+  (testing "the nearest known name within 2 edits, else no hint; the output schema the same way"
+    (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for :s: unknown schema :strng (did you mean :string?)"
+                 " — :malli.core/invalid-schema {:schema :strng} (defn_typed/schema_cases.clj:2)")]
+           (take 1 (load-error "defn_typed/schema_cases.clj" (str cases-ns "(defn-typed f {:s :strng} -> :any s)")))))
+    (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for :x: unknown schema :xyzq"
+                 " — :malli.core/invalid-schema {:schema :xyzq} (defn_typed/schema_cases.clj:2)")]
+           (take 1 (load-error "defn_typed/schema_cases.clj" (str cases-ns "(defn-typed f {:x [:vector :xyzq]} -> :any x)")))))
+    (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for the output: unknown schema :it (did you mean :int?)"
+                 " — :malli.core/invalid-schema {:schema :it} (defn_typed/schema_cases.clj:2)")
+            {:fn 'defn-typed.schema-cases/f :output true :schema :it
+             :malli/error {:type :malli.core/invalid-schema :message :malli.core/invalid-schema
+                           :data {:schema :it :form :it}}}]
+           (load-error "defn_typed/schema_cases.clj" (str cases-ns "(defn-typed f {:n :int} -> :it n)")))))
+  (testing "any other malli error: its key and data, no hint"
+    (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for :n: :malli.core/child-error"
+                 " {:type :maybe, :properties nil, :children [:int :int], :min 1, :max 1} (defn_typed/schema_cases.clj:2)")]
+           (take 1 (load-error "defn_typed/schema_cases.clj" (str cases-ns "(defn-typed f {:n [:maybe :int :int]} -> :any n)"))))))
+  (testing "a schema held in a var is judged as the definition loads, at the var's line"
+    (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for :a: unknown schema :it (did you mean :int?)"
+                 " — :malli.core/invalid-schema {:schema :it} (defn_typed/schema_cases.clj:3)")]
+           (take 1 (load-error "defn_typed/schema_cases.clj" (str cases-ns "(def Bad [:it])\n(defn-typed f {:a Bad} -> :int 1)")))))
+    (is (nil? (load-error "defn_typed/schema_cases.clj" (str cases-ns "(def Good [:int {:min 1}])\n(defn-typed f {:a Good} -> :int a)")))))
+  (testing "an unknown qualified keyword (a custom registry's name) is trusted at expansion and judged once loaded (check-var-schemas!)"
+    (try
+      (clojure.lang.Compiler/load (java.io.StringReader. (str cases-ns "(defn-typed f {:id :user/id} -> :any id)"))
+                                  "defn_typed/schema_cases.clj" "schema_cases.clj")
+      (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for :id: unknown schema :user/id"
+                   " — :malli.core/invalid-schema {:schema :user/id} (defn_typed/schema_cases.clj:2)")]
+             (take 1 (try (core/check-var-schemas! (resolve 'defn-typed.schema-cases/f)) nil
+                          (catch Exception e (root-error e))))))
+      (finally (remove-ns 'defn-typed.schema-cases))))
+  (testing "valid schemas: check-var-schemas! returns the var"
+    (is (= #'padded (core/check-var-schemas! #'padded)))))

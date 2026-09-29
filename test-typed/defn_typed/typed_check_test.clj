@@ -65,3 +65,21 @@
                          (str "defn-typed: Typed Clojure check of defn-typed.typed-check-fixture/" f " skipped (over 2 s)\n")))
              out))
       (is (< ms 8000) (str ms " ms: each check abandoned at its deadline")))))
+
+(deftest invalid-schema-without-malli-at-expansion
+  (testing "a fresh JVM where nothing loaded malli before the definition expanded: typed-check! judges the schemas before malli registers them, the load fails with the expansion's one line, no «Typed Clojure check … failed»"
+    (let [java (str (System/getProperty "java.home") "/bin/java")
+          classpath (str (System/getProperty "java.class.path") java.io.File/pathSeparator "test")
+          process (.start (doto (ProcessBuilder. [java "-cp" classpath "clojure.main" "-e"
+                                                  (str "(require 'defn-typed.core)"
+                                                       "(println :malli-loaded (some? (find-ns 'malli.core)))"
+                                                       "(require 'defn-typed.schema-typo)")])
+                            (.redirectErrorStream true)))
+          out (slurp (.getInputStream process))
+          lines (set (str/split-lines out))]
+      (is (= 1 (.waitFor process)) out)
+      (is (contains? lines ":malli-loaded false") out)
+      (is (contains? lines (str "defn-typed: defn-typed.schema-typo/order-total — invalid schema for :qty: unknown schema :it (did you mean :int?)"
+                                " — :malli.core/invalid-schema {:schema :it} (test/defn_typed/schema_typo.clj:11)"))
+          out)
+      (is (not (str/includes? out "Typed Clojure check")) out))))

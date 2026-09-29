@@ -15,7 +15,7 @@
    defn-typed.core loads this namespace itself when Typed Clojure is on the classpath: each
    defn-typed definition is then checked as it loads (`:typed-check` in defn-typed.edn)."
   (:require [clojure.string :as str]
-            [defn-typed.core :refer [defn-typed defnt defmeta schema-props walk-rows]]
+            [defn-typed.core :refer [defn-typed defnt defmeta check-var-schemas! schema-props walk-rows]]
             [malli.core :as m]
             [malli.instrument :as mi]
             [typed.clj.checker :as checker]
@@ -95,8 +95,10 @@
     (count forms)))
 
 (defmeta install!
-  {:doc "Makes Typed Clojure know every defn-typed function of `namespaces` (loaded symbols): collects
-         their malli function schemas (typed.malli's var-type provider, registered by its
+  {:doc "Makes Typed Clojure know every defn-typed function of `namespaces` (loaded symbols): judges
+         their schemas first (check-var-schemas!: one malli cannot build throws one line naming
+         the function, the row or the output, and the file:line), then collects their malli
+         function schemas (typed.malli's var-type provider, registered by its
          typedclojure_config on the classpath, types each function from them) and evaluates the
          `t/ann` forms of their `<name>--positional` / `<name>--body` and `<name>-props`, and of
          the defn-typed.core vars a checked expansion calls. Run it again after a namespace is
@@ -104,20 +106,25 @@
 
 ;; no cases: it registers annotations in the checker's global environment
 (defn-typed install! {:namespaces [:sequential :symbol]} -> :int
+  (doseq [ns-sym namespaces
+          [_ v] (sort-by key (ns-interns ns-sym))]
+    (check-var-schemas! v))
   (mi/collect! {:ns namespaces})
   (eval-anns! (mapcat defn-typed-fns namespaces))
 )
 
 (defmeta install-fn!
-  {:doc "install! for the one defn-typed function held by `fn-var`: collects its malli function
-         schema and evaluates the `t/ann` forms of its `<name>--positional` / `<name>--body` and
-         `<name>-props`, and of the defn-typed.core vars a checked expansion calls. What
-         defn-typed.core runs right after a definition it type-checks. Returns the number of
+  {:doc "install! for the one defn-typed function held by `fn-var`: judges its schemas
+         (check-var-schemas!), collects its malli function schema and evaluates the `t/ann` forms
+         of its `<name>--positional` / `<name>--body` and `<name>-props`, and of the
+         defn-typed.core vars a checked expansion calls. What defn-typed.core runs right after a
+         definition it type-checks. Returns the number of
          `t/ann` forms evaluated (those of the defn-typed.core vars only, when fn-var is not a
          defn-typed function)."})
 
 ;; no cases: it registers annotations in the checker's global environment
 (defn-typed install-fn! {:fn-var :any} -> :int
+  (check-var-schemas! fn-var)
   (mi/-collect! fn-var)
   (eval-anns! (keep defn-typed-fn [fn-var]))
 )

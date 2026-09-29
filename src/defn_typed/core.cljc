@@ -619,16 +619,129 @@
 
 #?(:clj
    (defn- malli-check-fns
-     "{:validate :explain :type :error-message} of malli for the literal value check, or nil: for cljs loaded
-      into the compiler's JVM; for clj only when something already loaded malli (a dev/test/REPL
-      loader), so a server compiling from source never loads it, switch on or off."
+     "{:validate :explain :type :error-message :schema :schema-names} of malli for the literal value
+      check and the schema check (check-schemas!), or nil: for cljs loaded into the compiler's JVM;
+      for clj only when something already loaded malli (a dev/test/REPL loader), so a server
+      compiling from source never loads it, switch on or off. `:schema-names` = a fn of no
+      arguments returning the names of the default registry's schemas."
      [cljs?]
      (when (or cljs? (find-ns 'malli.core))
        (try {:validate (requiring-resolve 'malli.core/validate)
              :explain (requiring-resolve 'malli.core/explain)
              :type (requiring-resolve 'malli.core/type)
-             :error-message (requiring-resolve 'malli.error/error-message)}
+             :error-message (requiring-resolve 'malli.error/error-message)
+             :schema (requiring-resolve 'malli.core/schema)
+             :schema-names (let [registry (requiring-resolve 'malli.core/-registry)
+                                 schemas (requiring-resolve 'malli.registry/-schemas)]
+                             #(keys (schemas (registry))))}
             (catch Exception _ nil)))))
+
+#?(:clj
+   (defn- edit-distance
+     "The Levenshtein distance between the strings a and b: the fewest one-character insertions,
+      deletions and substitutions that turn a into b."
+     [a b]
+     (peek (reduce (fn [previous ca]
+                     (reduce (fn [row [j cb]]
+                               (conj row (min (inc (peek row))
+                                              (inc (nth previous (inc j)))
+                                              (+ (nth previous j) (if (= ca cb) 0 1)))))
+                             [(inc (first previous))]
+                             (map-indexed vector b)))
+                   (vec (range (inc (count b))))
+                   a))))
+
+#?(:clj
+   (defn- nearest-schema-name
+     "The name in names (a registry's schema names) nearest to the unknown name: of its type (a
+      keyword for a keyword), at most 2 edits away (edit-distance), the nearer first, then by text;
+      nil when none is that near."
+     [unknown names]
+     (let [text (str unknown)]
+       (->> names
+            (filter #(= (type %) (type unknown)))
+            (keep (fn [n] (let [d (edit-distance text (str n))] (when (<= 1 d 2) [d (str n) n]))))
+            (sort-by (juxt first second))
+            first
+            peek))))
+
+#?(:clj
+   (defn- project-path
+     "file (clj `*file*`, a classpath-relative or an absolute path; the cljs compiler's file) as a
+      path relative to the working directory when it names a file under it (`src/shop/price.clj`),
+      else as given (a file inside a jar, `NO_SOURCE_PATH`)."
+     [file]
+     (let [text (str file)
+           given (java.io.File. text)
+           ^java.net.URL url (when-not (or (nil? file) (= "NO_SOURCE_PATH" text) (.isAbsolute given))
+                               (.getResource (clojure.lang.RT/baseLoader) text))
+           ^java.io.File on-disk (cond (.isAbsolute given) given
+                                       (and url (= "file" (.getProtocol url))) (java.io.File. (.toURI url))
+                                       ;; no file on disk to show the path of
+                                       :else nil)
+           root (.toPath (.getCanonicalFile (java.io.File. (System/getProperty "user.dir"))))
+           path (some-> on-disk .getCanonicalFile .toPath)]
+       (if (and path (.startsWith path root))
+         (str (.relativize root path))
+         text))))
+
+#?(:clj
+   (defn- schema-items
+     "The schemas of a defn-typed function to check, in order: `{:row k :schema s}` for each row of
+      props (its `[:map …]`), then `{:output true :schema out}`."
+     [props out]
+     (conj (mapv (fn [row] (let [[k _ type] (row-parts row)] {:row k :schema type}))
+                 (filter vector? (rest props)))
+           {:output true :schema out})))
+
+#?(:clj
+   (defn- check-schemas!
+     "Throws when malli cannot build the schema of an item (schema-items) of the defn-typed function
+      f, the first such in order: an ex-info of one line, `defn-typed: <f> — invalid schema for
+      <row key | the output>: <cause> (<file>:<line>)`, ex-data `{:fn :row | :output :schema
+      :malli/error}`. The cause = malli's error key and its data, the data's `:form` (the schema as
+      written) left out, led by `unknown schema <name> (did you mean <nearest>?) — ` when the
+      registry does not know a name (`:malli.core/invalid-schema`; the parenthesis only when
+      nearest-schema-name finds one). `:at :expansion` trusts an unknown qualified keyword: a
+      custom registry's names (qualified, malli's own are not) exist only once it is live, at load;
+      `:at :load` judges every name."
+     [{f :fn :keys [malli items at file line]}]
+     (doseq [{:keys [row output schema] :as item} items
+             :let [e (try ((:schema malli) schema) nil (catch Exception e e))]
+             :when e
+             :let [{error-type :type data :data :as error} (ex-data e)
+                   unknown (when (= :malli.core/invalid-schema error-type) [(:schema data)])]
+             :when (not (and (= :expansion at) unknown (qualified-keyword? (first unknown))))]
+       (let [hint (when unknown
+                    (str "unknown schema " (pr-str (first unknown))
+                         (when-let [n (nearest-schema-name (first unknown) ((:schema-names malli)))]
+                           (str " (did you mean " (pr-str n) "?)"))
+                         " — "))
+             cause (if error-type
+                     (str (pr-str error-type) " " (pr-str (dissoc data :form)))
+                     ;; not a malli error: the exception's class and message
+                     (str (.getName (class e)) " " (ex-message e)))]
+         (throw (ex-info (str "defn-typed: " f " — invalid schema for " (if output "the output" (pr-str row)) ": "
+                              hint cause " (" (project-path file) ":" line ")")
+                         (merge {:fn f :schema schema :malli/error error} (select-keys item [:row :output]))))))))
+
+#?(:clj
+   (defn check-var-schemas!
+     "check-schemas! (`:at :load`) over the defn-typed function held by v: its rows (`<name>-props`)
+      and its output (`:malli/schema`), at the var's `:file` and `:line`. What a definition runs as
+      it loads when a row or the output holds a symbol or a call (the expansion judges data only),
+      and what the Typed Clojure bridge runs before it registers v's schema with malli. Nothing
+      for a var that is not a defn-typed function, or without malli (malli-check-fns). Returns v."
+     [v]
+     (let [sym (symbol v)
+           props-var (resolve (symbol (namespace sym) (str (name sym) "-props")))
+           schema (:malli/schema (meta v))
+           malli (malli-check-fns false)]
+       ;; no <name>-props beside it or no [:=> …] schema: not a defn-typed function
+       (when (and malli props-var (vector? schema) (= :=> (first schema)))
+         (check-schemas! {:malli malli :fn sym :at :load :file (:file (meta v)) :line (:line (meta v))
+                          :items (schema-items @props-var (peek schema))}))
+       v)))
 
 #?(:clj
    (defn- js-number-literal
@@ -1161,7 +1274,10 @@
      "Called by a clj defn-typed definition right after its defn when Typed Clojure was on the
       classpath at its expansion, with its var, its defmeta's `:typed-check` (nil: none) and the
       line of its form. Unless the setting (the defmeta's, else the project's) is `:off`: loads
-      defn-typed.typed-clojure (once per JVM), makes the function known to it (install-fn!), checks
+      defn-typed.typed-clojure (once per JVM, malli with it), judges the function's schemas
+      (check-var-schemas!: one malli cannot build throws its line, the load fails), makes the
+      function known to the checker (install-fn!; a failure there, the schemas fine, prints
+      `defn-typed: Typed Clojure check of <f> failed: <message>`), checks
       the definition form (check-form!) within typed-check-ms and reports each finding, those the
       checker could not type dropped: `:warn` prints `WARNING defn-typed <file>:<line> <message>`
       (the message led by `input of <f>: ` / `output of <f>: ` when it is about a defn-typed
@@ -1175,6 +1291,7 @@
            mode (or mode (setting :typed-check))
            file *file*]
        (when (and form (not= :off mode) (not (loading? 'defn-typed.typed-clojure)) @typed-bridge-loaded)
+         (check-var-schemas! v)
          (let [[kind findings] (typed-findings {:v v :form form :file file})]
            (case kind
              :skipped (print-err! (str "defn-typed: Typed Clojure check of " f " skipped (" findings ")"))
@@ -1303,7 +1420,11 @@
       `:off` emits no such code. Every call site goes through expand-call (clj `:inline`, cljs a macro of
       the same name, release builds only): a map literal is checked at compile time, and with the
       switch on (inline-on?) a fitting literal compiles to the positional call. Its docstring and
-      cases go into `defmeta` above it. `:default` in a row's entry props is a compile error."
+      cases go into `defmeta` above it. `:default` in a row's entry props is a compile error. So is a
+      row or output schema malli cannot build, once malli is loaded (check-schemas!, cljs always):
+      one line naming the function, the row, malli's error and the file:line; a schema holding a
+      symbol or a call is judged as the definition loads (check-var-schemas!), and so is every
+      schema of a definition the Typed Clojure bridge registers."
      ([] (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {})))
      ([fn-name & more]
       (let [fail! #(throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name}))
@@ -1336,6 +1457,12 @@
               cljs? (boolean (:ns &env))
               q (qualified &env fn-name)
               q-props (qualified &env props)
+              ;; a schema malli cannot build fails the definition here, at its form; one holding a
+              ;; symbol or a call is judged as it loads (schema-check-call, clj)
+              [literal-items loaded-items] ((juxt filter remove) (comp constant-form? :schema) (schema-items table out-schema))
+              _ (when-let [malli (malli-check-fns cljs?)]
+                  (check-schemas! {:malli malli :fn q :at :expansion :items literal-items :line (:line (meta &form))
+                                   :file (if cljs? (some-> (resolve 'cljs.analyzer/*cljs-file*) deref) *file*)}))
               rows (vec (map-indexed
                          (fn [i row]
                            (let [[k row-props type] (row-parts row)
@@ -1432,6 +1559,10 @@
                 ;; malli.dev.cljs/start! in the hot-reload after-load hook)
                 instrumented-before-call (when-not cljs? [(plumbing `(instrumented-before! '~q))])
                 keep-instrumented-call (when-not cljs? [(plumbing `(keep-instrumented! (var ~fn-name)))])
+                ;; clj: a row or the output holding a symbol or a call is judged once evaluated, right
+                ;; after the defn, before malli registers the function's schema
+                schema-check-call (when (and (not cljs?) (seq loaded-items))
+                                    [(plumbing `(check-var-schemas! (var ~fn-name)))])
                 ;; the defmeta's cases run once the definition (re-instrumented) is in place
                 inout-call (when-not *typed-checking*
                              (some-> (inout-check-call {:env &env :fn-name fn-name :m defmeta-above})
@@ -1454,6 +1585,7 @@
                              ~@(when key-check [key-check])
                              ~call)
                     positional? plumbing)
+                 ~@schema-check-call
                  ~@keep-instrumented-call
                  ~@inout-call
                  ~@signature-call
@@ -1481,6 +1613,7 @@
                           (let [~result ~(if positional? call `(~body-fn ~m))]
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
+                   ~@schema-check-call
                    ~@keep-instrumented-call
                    ~@inout-call
                    ~@signature-call
