@@ -326,6 +326,15 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
   naming the var.
 - A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
   a compile error naming the function. Single arity only.
+- A row or output schema malli cannot build is a compile error naming the function, the row,
+  malli's error and the file:line; a schema held in a var is judged as the definition loads. clj
+  judges once malli is loaded (a dev/test/REPL loader, the Typed Clojure bridge), cljs builds
+  always. Names from a custom registry must be qualified (malli's own names are unqualified): they
+  are trusted at expansion and checked when the registry is live.
+
+  ```
+  defn-typed: shop.price/order-total — invalid schema for :qty: unknown schema :it (did you mean :int?) — :malli.core/invalid-schema {:schema :it} (src/shop/price.clj:10)
+  ```
 
 `defn-typed` expands to plain Clojure:
 
