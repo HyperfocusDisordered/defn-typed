@@ -333,6 +333,14 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 
   A key only in `out` reads `[:qty] expected 1, missing`, a key only in the result
   `[:gift] unexpected false`; two differences are joined by `; `.
+  A case that throws names the exception first:
+
+  ```
+  WARNING src/shop/order.clj:4 shop.order/place-order in/out case 1: threw Divide by zero (expected 0) — input {:n 0}
+  ```
+
+  `assert-cases` (and so `deftests!`, `test-var!`, `test-ns!`) gives a failing case's assertion that
+  same line as its message.
 - A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
   a compile error naming the function. Single arity only.
 - A row or output schema malli cannot build is a compile error naming the function, the row,
