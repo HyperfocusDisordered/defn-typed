@@ -324,6 +324,15 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 - **`:inout-tests`** = `[in out]` pairs, `in` = the function's single argument (the map; or the
   scalar of a one-argument plain `defn`). A case passes iff `(= out (f in))`. A non-pair throws
   naming the var.
+  As the definition loads, a failing case prints one line naming what differs: the key paths
+  (maps are compared key by key, every other value as a whole), then the case's input:
+
+  ```
+  WARNING src/shop/order.clj:4 shop.order/place-order in/out case 0: [:sku] expected "bmx", got "sd" — input {:order {:sku "sd", :address {:city "Минск"}}}
+  ```
+
+  A key only in `out` reads `[:qty] expected 1, missing`, a key only in the result
+  `[:gift] unexpected false`; two differences are joined by `; `.
 - A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
   a compile error naming the function. Single arity only.
 - A row or output schema malli cannot build is a compile error naming the function, the row,
