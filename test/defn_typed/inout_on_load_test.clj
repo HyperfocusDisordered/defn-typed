@@ -50,7 +50,7 @@
   (testing ":warn (default): one stderr line per failing case, at the defmeta's line; the load goes on"
     (let [{:keys [path err thrown]} (with-property nil #(load-source! 'inout-load.broken broken))]
       (is (nil? thrown))
-      (is (= [(str "WARNING " path ":2 inout-load.broken/tripled in/out case 1: {:n 2} → expected 5, got 6")]
+      (is (= [(str "WARNING " path ":2 inout-load.broken/tripled in/out case 1: expected 5, got 6 — input {:n 2}")]
              (str/split-lines err))))))
 
 (deftest fixed-case-prints-nothing
@@ -71,10 +71,10 @@
   (testing "the project setting :error: the load throws with the line's text"
     (let [{:keys [path err thrown]} (with-property :error #(load-source! 'inout-load.error broken))]
       (is (= "" err))
-      (is (= (str path ":2 inout-load.error/tripled in/out case 1: {:n 2} → expected 5, got 6") thrown))))
+      (is (= (str path ":2 inout-load.error/tripled in/out case 1: expected 5, got 6 — input {:n 2}") thrown))))
   (testing "the defmeta's own :inout-check :error wins over the project's :warn"
     (let [own (assoc broken 1 " {:inout-check :error :inout-tests [[{:n 1} 3]")]
-      (is (re-find #"in/out case 1: \{:n 2\} → expected 5, got 6$"
+      (is (re-find #"in/out case 1: expected 5, got 6 — input \{:n 2\}$"
                    (str (:thrown (with-property nil #(load-source! 'inout-load.own own)))))))))
 
 (deftest off-runs-nothing
@@ -91,7 +91,7 @@
                " {:inout-tests [[{:n 1} 3]"
                "                [{:n 2} 5]]})"]
         {:keys [path err]} (with-property nil #(load-source! 'inout-load.below below))]
-    (is (= [(str "WARNING " path ":6 inout-load.below/tripled in/out case 1: {:n 2} → expected 5, got 6")]
+    (is (= [(str "WARNING " path ":6 inout-load.below/tripled in/out case 1: expected 5, got 6 — input {:n 2}")]
            (str/split-lines err)))))
 
 (deftest case-calling-a-function-defined-below
@@ -108,7 +108,7 @@
                   ""
                   "(defn g [n] (* 2 n))"]
           {:keys [path err]} (load-source! 'inout-load.forward source)]
-      (is (= [(str "WARNING " path ":4 inout-load.forward/f in/out case 1: {:n 2} → expected 7, got 4")]
+      (is (= [(str "WARNING " path ":4 inout-load.forward/f in/out case 1: expected 7, got 4 — input {:n 2}")]
              (str/split-lines err)))
       (testing "loading the file again prints the line once more, never twice"
         (is (= 1 (count (str/split-lines (:err (load-source! 'inout-load.forward source))))))))))
@@ -128,10 +128,35 @@
         (let [{:keys [path err]} (load-source! 'inout-load.never source :keep)]
           (is (= "" err))
           (is (= 1 (watches)))
-          (is (= [(str "WARNING " path ":4 inout-load.never/f in/out case 0: {:n 2} → expected 7, got 4")]
+          (is (= [(str "WARNING " path ":4 inout-load.never/f in/out case 0: expected 7, got 4 — input {:n 2}")]
                  (str/split-lines (let [e (java.io.StringWriter.)]
                                     (binding [*err* e *ns* (the-ns 'inout-load.never)]
                                       (eval '(defn g [n] (* 2 n))))
                                     (str e)))))
           (is (= 0 (watches))))
         (finally (remove-ns 'inout-load.never))))))
+
+(deftest mismatch-names-what-differs
+  (testing "one line: the key paths that differ first (sorted), the case input last"
+    (let [source ["(defmeta pick"
+                  " {:inout-tests [[{:got {:sku \"sd\" :qty 1}}             {:sku \"bmx\" :qty 1}]"
+                  "                [{:got {:sku \"bmx\"}}                   {:sku \"bmx\" :qty 1}]"
+                  "                [{:got {:sku \"bmx\" :gift false}}       {:sku \"bmx\"}]"
+                  "                [{:got {:address {:city \"Брест\"}}}     {:address {:city \"Минск\"}}]"
+                  "                [{:got {:b 2 :a 2}}                      {:a 1 :b 1}]"
+                  "                [{:got 6}                                5]"
+                  "                [{:got {:items [1 3]}}                   {:items [1 2]}]]})"
+                  ""
+                  "(defn-typed pick {:got :any} -> :any"
+                  "  got"
+                  ")"]
+          {:keys [path err]} (with-property nil #(load-source! 'inout-load.diffs source))
+          head (str "WARNING " path ":2 inout-load.diffs/pick in/out case ")]
+      (is (= [(str head "0: [:sku] expected \"bmx\", got \"sd\" — input {:got {:sku \"sd\", :qty 1}}")
+              (str head "1: [:qty] expected 1, missing — input {:got {:sku \"bmx\"}}")
+              (str head "2: [:gift] unexpected false — input {:got {:sku \"bmx\", :gift false}}")
+              (str head "3: [:address :city] expected \"Минск\", got \"Брест\" — input {:got {:address {:city \"Брест\"}}}")
+              (str head "4: [:a] expected 1, got 2; [:b] expected 1, got 2 — input {:got {:b 2, :a 2}}")
+              (str head "5: expected 5, got 6 — input {:got 6}")
+              (str head "6: [:items] expected [1 2], got [1 3] — input {:got {:items [1 3]}}")]
+             (str/split-lines err))))))

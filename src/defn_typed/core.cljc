@@ -1834,13 +1834,49 @@
 (defn check-vars [vars]
   (mapv check-var (case-vars vars)))
 
+(defn case-difference
+  "What differs between expected and got, one item per difference joined by `; `, sorted by the
+   pr-str of the path: `[:a :b] expected <x>, got <y>` (key on both sides), `[:a :b] expected <x>,
+   missing` (key only in expected), `[:a :b] unexpected <y>` (key only in got). Recursion goes on
+   only while both sides are maps; every other value is a leaf compared with `=`. A root that is
+   not a map on either side reads `expected <x>, got <y>`, without a path."
+  [expected got]
+  (let [item (fn [path body] [(pr-str path) (str (when (seq path) (str (pr-str path) " ")) body)])
+        walk (fn walk [path e g]
+               (if (and (map? e) (map? g))
+                 (mapcat (fn [k]
+                           (let [path (conj path k)]
+                             (cond
+                               (not (contains? g k)) [(item path (str "expected " (pr-str (get e k)) ", missing"))]
+                               (not (contains? e k)) [(item path (str "unexpected " (pr-str (get g k))))]
+                               :else (walk path (get e k) (get g k)))))
+                         (set (concat (keys e) (keys g))))
+                 (when (not= e g)
+                   [(item path (str "expected " (pr-str e) ", got " (pr-str g)))])))
+        items (or (seq (walk [] expected got)) [(item [] (str "expected " (pr-str expected) ", got " (pr-str got)))])]
+    (apply str (interpose "; " (map second (sort-by first items))))))
+
+(defn-typed.core/tests #'case-difference
+  [[[{:sku "bmx" :qty 1} {:sku "sd" :qty 1}]           "[:sku] expected \"bmx\", got \"sd\""]
+   [[{:sku "bmx" :qty 1} {:sku "bmx"}]                 "[:qty] expected 1, missing"]
+   [[{:sku "bmx"} {:sku "bmx" :gift false}]            "[:gift] unexpected false"]
+   [[{:address {:city "Минск"}} {:address {:city "Брест"}}]
+    "[:address :city] expected \"Минск\", got \"Брест\""]
+   [[{:b 1 :a 1} {:b 2 :a 2}]                          "[:a] expected 1, got 2; [:b] expected 1, got 2"]
+   [[5 6]                                              "expected 5, got 6"]
+   [[{:a 1} 6]                                         "expected {:a 1}, got 6"]
+   [[{:items [1 2]} {:items [1 3]}]                    "[:items] expected [1 2], got [1 3]"]])
+
 (defn- case-text
-  "`<file>:<line> <ns/f> in/out case <i>: <in> → expected <out>, got <actual>` for a failing case
-   (run-case's result); a throwing one ends `threw <message>`."
+  "`<file>:<line> <ns/f> in/out case <i>: <differences> — input <in>` for a failing case
+   (run-case's result; case-difference names the key paths that differ); a throwing one reads
+   `<in> → expected <out>, threw <message>`."
   [{:keys [file line f result]}]
-  (let [{:keys [i in expected actual]} result]
-    (str file ":" line " " f " in/out case " i ": " (pr-str (shown-in in)) " → expected " (pr-str expected) ", "
-         (if (contains? result ::thrown) (str "threw " (second actual)) (str "got " (pr-str actual))))))
+  (let [{:keys [i in expected actual]} result
+        head (str file ":" line " " f " in/out case " i ": ")]
+    (if (contains? result ::thrown)
+      (str head (pr-str (shown-in in)) " → expected " (pr-str expected) ", threw " (second actual))
+      (str head (case-difference expected actual) " — input " (pr-str (shown-in in))))))
 
 (defn- report-cases!
   "Reports texts (case-text) as mode says: `:warn` one `WARNING <text>` stderr line each (cljs
@@ -1928,8 +1964,9 @@
    keep-instrumented!), or by a defmeta written below the definition, with
    {:var :mode :file :line :pending}: runs the var's cases, the ones check-var runs, and
    reports each failing one as mode (`:inout-check`, never `:off`: no call is emitted then) says:
-   `:warn` prints `WARNING <file>:<line> <ns/f> in/out case <i>: <in> → expected <out>, got
-   <actual>` (`threw <message>`), `:error` throws that text. All passing: nothing. A case calling a
+   `:warn` prints `WARNING <file>:<line> <ns/f> in/out case <i>: [:k] expected <x>, got <y> — input
+   <in>` (case-difference; a throwing case `<in> → expected <out>, threw <message>`), `:error`
+   throws that text. All passing: nothing. A case calling a
    function defined further down waits for it (inout-run!). Replaces the waiting cases of the
    function's previous definition. Returns the var."
   [{:keys [var] :as check}]

@@ -43,4 +43,17 @@
   (* 3 n)
 )
 
+(defmeta pick
+  {:inout-tests [[{:got {:sku "sd" :qty 1}}         {:sku "bmx" :qty 1}]
+                 [{:got {:sku "bmx"}}               {:sku "bmx" :qty 1}]
+                 [{:got {:sku "bmx" :gift false}}   {:sku "bmx"}]
+                 [{:got {:address {:city "Брест"}}} {:address {:city "Минск"}}]
+                 [{:got {:b 2 :a 2}}                {:a 1 :b 1}]
+                 [{:got 6}                          5]
+                 [{:got {:items [1 3]}}             {:items [1 2]}]]})
+
+(defn-typed pick {:got :any} -> :any
+  got
+)
+
 (set! js/console.error console-error)
