@@ -204,7 +204,10 @@ The library does not depend on Typed Clojure. Add it to your dev alias:
 - `install!` collects the namespaces' malli function schemas, from which typed.malli's var-type
   provider (registered by the `typedclojure_config.cljc` in its jar) types each function, and
   evaluates `t/ann` for each function's `<name>--positional` (where the body lives) and
-  `<name>-props`, and for the `defn-typed.core` functions an expansion calls.
+  `<name>-props`, and for the `defn-typed.core` functions an expansion calls. A function with type
+  variables gets its own `t/ann` too, `(t/All [T] …)` (see Generic functions).
+- Loading `defn-typed.typed-clojure` teaches typed.malli the `[:tuple …]` schema:
+  `[:tuple :int :string]` is `(t/HVec [t/AnyInteger t/Str])` (typed.malli alone reads it as `t/Any`).
 - `check-form!` checks one top-level form (read from the file with its `:line`) and returns every
   type error as data. `:defn-typed?` is true when the error is inside a `(defn-typed …)` form or
   its form calls a defn-typed function: a per-edit hook reports those first, while the rest of the
@@ -309,6 +312,7 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 (defmeta name {:doc "…" :inout-tests [[in out] …] …other var metadata})
 
 (defn-typed name {key schema …} -> out-schema body…)
+(defn-typed name [T …] {key schema …} -> out-schema body…)   ; with type variables, see Generic functions
 ```
 
 - `defmeta` goes before the `defn-typed` of the same name: the macro reads it to put `:doc` on
@@ -373,6 +377,41 @@ of the destructuring, taken from the rows when the macro expands. A row whose de
 evaluated schema shows (a symbol as its type, `:frame frame`, or a `[:map …]` row with defaults
 inside) is read at call time. `<name>-props` keeps entry order up to 8 rows (a larger map literal
 reads as a hash map; the order is cosmetic).
+
+## Generic functions
+
+A function whose output type follows the type of its input lists type variables in a vector
+between its name and its input map:
+
+<!-- readme-test -->
+```clojure
+(defmeta first-of
+  {:doc "Первый элемент списка — того же типа, что его элементы."
+   :inout-tests [[{:xs [3 4]} 3]
+                 [{:xs []}    nil]]})
+
+(defn-typed first-of [T] {:xs [:sequential T]} -> [:maybe T]
+  (first xs)
+)
+```
+
+Each symbol of the vector is a type variable in every schema of the signature, the rows and the
+output, at any depth.
+
+- malli has no type variables: the macro writes `[:any {:defn-typed/type-var "T"}]` in T's place,
+  so instrumentation, `<name>-props`, the compile-time literal checks and the clj-kondo types read
+  `:any`. ClojureScript expands the same way (Typed Clojure is Clojure only).
+- Typed Clojure annotates the function and its `<name>--positional` with `(t/All [T] …)`, so a
+  call's result has the type of what went in: `(inc (or (first-of {:xs [1 2]}) 0))` checks, and
+  `(inc (or (first-of {:xs ["a"]}) 0))` does not. The same function with `:any` in T's place
+  returns `t/Any`: `Function inc could not be applied to arguments: … Arguments: typed.clojure/Any`.
+- T can sit inside any schema the Typed Clojure bridge converts: `[:sequential T]`, `[:vector T]`,
+  `[:set T]`, `[:map-of :keyword T]` (the values' type), `[:maybe T]`, `[:or T :int]`,
+  `[:map [:k T]]`, `[:tuple T :int]` (`(t/HVec [T t/AnyInteger])`), and a schema a function builds:
+  `{:b (box T)}`, with `(defn box [t] [:map [:value t]])`, is a type of your own over T. A registry
+  schema (`[:ref ::box]`) is one fixed schema: a type variable cannot pass into it.
+- A type variable no schema uses, or a vector that is not distinct symbols, is a compile error
+  naming the function: `defn-typed f: no schema of the signature uses the type variable U`.
 
 ## Zero-cost calls
 

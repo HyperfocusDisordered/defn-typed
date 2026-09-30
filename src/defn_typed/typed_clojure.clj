@@ -12,6 +12,10 @@
    - `check-form!` checks one top-level form without evaluating it and returns its type errors
      as data, each marked whether it involves a defn-typed function;
    - `could-not-type?` tells a message saying the checker could not type the code from a type error.
+   A function with type variables (`(defn-typed f [T] {:xs [:sequential T]} -> [:maybe T] …)`) is annotated
+   `(t/All [T] …)`, the function and its `<name>--positional` alike. Loading this namespace also
+   teaches typed.malli the malli `[:tuple …]` schema: `(t/HVec [<item types>])` (typed.malli alone
+   types it `t/Any`).
    defn-typed.core loads this namespace itself when Typed Clojure is on the classpath: each
    defn-typed definition is then checked as it loads (`:typed-check` in defn-typed.edn)."
   (:require [clojure.string :as str]
@@ -28,20 +32,45 @@
   `[(t/ann ~(with-meta 'defn-typed.core/row-value {:no-check true}) [t/Any t/Any :-> t/Any])
     (t/ann ~(with-meta 'defn-typed.core/register-tests! {:no-check true}) [t/Any t/Any :-> t/Any])])
 
-(defn- type-of
-  "The Typed Clojure type syntax of a malli schema, as typed.malli's var-type provider builds it."
+;; `[:tuple A B]` → `(t/HVec [A B])`, each item typed with the caller's opts (its type variables
+;; included). typed.malli's register-malli->type-extension expands to this defmethod; written out,
+;; clj-kondo lints the body
+(defmethod s->t/-malli->type :tuple [schema opts]
+  `(t/HVec ~(mapv #(s->t/malli->type % (assoc opts ::s->t/mode :validator-type)) (m/children schema))))
+
+(defn- type-vars
+  "The type variables of a schema of a defn-typed signature (data or a malli schema): its
+   `[:any {:defn-typed/type-var \"T\"}]` schemas (defn-typed.core/type-var-schema) as
+   `{<that schema> T}`, T a symbol."
   [schema]
-  (s->t/malli->type (m/schema schema) {::s->t/mode :validator-type}))
+  (into {} (keep #(when-let [n (and (vector? %) (= :any (first %)) (:defn-typed/type-var (second %)))]
+                    [% (symbol n)]))
+        (tree-seq coll? seq (m/form schema))))
+
+(defn- type-of
+  "The Typed Clojure type syntax of a malli schema, as typed.malli's var-type provider builds it,
+   a type variable's schema (type-vars) read as the variable itself."
+  [schema]
+  (s->t/malli->type (m/schema schema) {::s->t/mode :validator-type
+                                       ::s->t/schema-form->free (type-vars schema)}))
+
+(defn- generic
+  "(t/All [T …] fn-type) over the type variables of schema (type-vars), in the order they first
+   appear in it; fn-type itself when it has none."
+  [schema fn-type]
+  (if-let [vars (seq (distinct (keep (type-vars schema) (tree-seq coll? seq schema))))]
+    (list `t/All (vec vars) fn-type)
+    fn-type))
 
 (defn- defn-typed-fn
-  "{:name :props :out} of the var v when it is a defn-typed function (a `<name>-props` var beside
-   it and a `:malli/schema` of one map argument), else nil."
+  "{:name :props :out :schema} of the var v when it is a defn-typed function (a `<name>-props` var
+   beside it and a `:malli/schema` of one map argument), else nil."
   [v]
   (let [sym (symbol v)
         schema (:malli/schema (meta v))
         props-var (resolve (symbol (namespace sym) (str (name sym) "-props")))]
     (when (and props-var (vector? schema) (= :=> (first schema)))
-      {:name sym :props @props-var :out (peek schema)})))
+      {:name sym :props @props-var :out (peek schema) :schema schema})))
 
 (defn- required-if-default
   "row without `:optional` when its type carries `:default` in its own props: the body sees the
@@ -56,8 +85,10 @@
   "The `t/ann` forms of the defn-typed function f (defn-typed-fn): `<name>-props` as t/Any, the
    body fn `<name>--positional` (the rows' types in entry order, a row optional without a default
    nilable, typed as the body sees them: every defaulted key present, at any depth) or
-   `<name>--body` (the map), each returning the output's type."
-  [{:keys [name props out]}]
+   `<name>--body` (the map), each returning the output's type. With type variables (generic), both
+   are `(t/All [T …] …)`, and so is f itself: the type typed.malli's provider would build from its
+   `:malli/schema`, the variables in place (the provider alone reads them as t/Any)."
+  [{:keys [name props out schema]}]
   (let [sibling #(symbol (namespace name) (str (clojure.core/name name) %))
         filled (walk-rows required-if-default props)
         rows (m/children (m/schema filled))
@@ -74,7 +105,8 @@
                  ;; the body is in name itself, which the provider types
                  :else nil)]
     (cond-> [`(t/ann ~(sibling "-props") t/Any)]
-      params (conj `(t/ann ~(symbol (or positional body)) ~(conj params :-> (type-of out)))))))
+      params (conj `(t/ann ~(symbol (or positional body)) ~(generic schema (conj params :-> (type-of out)))))
+      (seq (type-vars schema)) (conj `(t/ann ~name ~(generic schema (type-of schema)))))))
 
 (defn- defn-typed-fns
   "defn-typed-fn of every var interned in ns-sym that is a defn-typed function, sorted by name."

@@ -12,15 +12,17 @@
 
 (deftest readme-examples-compile-and-pass
   (let [blocks (readme-examples)]
-    (is (= 3 (count blocks)))
+    (is (= 4 (count blocks)))
     (binding [*ns* *ns*]
       (load-string (apply str blocks))))
   (testing "their defmeta cases run against their defn-typed fns"
-    (is (= [{:var 'example/fizzbuzz :cases 5 :failures []}
+    (is (= [{:var 'example/first-of :cases 2 :failures []}
+            {:var 'example/fizzbuzz :cases 5 :failures []}
             {:var 'example/invite-token-of :cases 5 :failures []}
             {:var 'example/order-total :cases 3 :failures []}]
            (core/check-ns 'example))))
   (testing "a call reads the rows as locals"
     (is (= 270 ((resolve 'example/order-total) {:price 100 :qty 3 :discount 10})))
     (is (= "FizzBuzz" ((resolve 'example/fizzbuzz) {:n 30})))
-    (is (= "Xy_9-z" ((resolve 'example/invite-token-of) {:url-token nil :start-param "invite-Xy_9-z"})))))
+    (is (= "Xy_9-z" ((resolve 'example/invite-token-of) {:url-token nil :start-param "invite-Xy_9-z"})))
+    (is (= :a ((resolve 'example/first-of) {:xs [:a :b]})))))

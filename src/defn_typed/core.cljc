@@ -387,6 +387,33 @@
          :else (into [:map] (map row table))))))
 
 #?(:clj
+   (defn- type-var-schema
+     "The schema a type variable of a defn-typed signature stands for: `[:any {:defn-typed/type-var
+      \"T\"}]` for T. malli reads `:any`; the Typed Clojure bridge reads the variable back from the
+      property."
+     [sym]
+     [:any {:defn-typed/type-var (name sym)}]))
+
+#?(:clj
+   (defn- with-type-vars
+     "[input out-schema] with every symbol of type-vars replaced, at any depth, by its
+      type-var-schema: in the rows, inside a call that builds a row's schema, in the output. Calls
+      fail! when type-vars is not a vector of distinct symbols, or when a type variable appears in
+      neither. input and out-schema as they are without type-vars."
+     [{:keys [fail! type-vars input out-schema]}]
+     (if (nil? type-vars)
+       [input out-schema]
+       (let [written (set (filter symbol? (tree-seq coll? seq [input out-schema])))
+             unused (remove written type-vars)]
+         (when-not (and (seq type-vars) (every? simple-symbol? type-vars) (apply distinct? type-vars))
+           (fail! (str "the type variables are a vector of distinct symbols, got " (pr-str type-vars))))
+         (when (seq unused)
+           (fail! (str "no schema of the signature uses the type variable" (when (next unused) "s") " "
+                       (apply str (interpose " " unused)))))
+         (clojure.walk/postwalk-replace (into {} (map (juxt identity type-var-schema)) type-vars)
+                                        [input out-schema])))))
+
+#?(:clj
    (defn- arg-vector?
      "Whether the first body form is an argument vector: a vector of binding forms (symbols,
       destructuring maps) that holds a destructuring map or is followed by more body. A vector
@@ -1529,6 +1556,10 @@
 #?(:clj
    (defmacro defn-typed
      "(defn-typed name {key schema …} -> <out-schema> body…): a one-arity function of one map.
+      (defn-typed name [T …] {key schema …} -> <out-schema> body…): the same with type variables:
+      each symbol of the vector stands, in every schema of the signature, for
+      `[:any {:defn-typed/type-var \"T\"}]` (with-type-vars), which malli reads as `:any` and the
+      Typed Clojure bridge as the type variable of a `(t/All [T …] …)`.
       The input = the map literal of its rows, one entry per line: `key schema`, or `key [props schema]`
       for a row with props; metadata on the map is a compile error. Wrapped into `[:map …]` and
       def'd as `<name>-props`.
@@ -1567,6 +1598,8 @@
             _ (when (string? (first more))
                 (fail! "docstring goes to defmeta"))
             [input [arrow & after-arrow]] (split-with #(not= '-> %) more)
+            ;; a vector right before the input map lists the type variables
+            [type-vars input] (if (and (vector? (first input)) (next input)) [(first input) (rest input)] [nil input])
             [out-schema & body] after-arrow]
         (when-not (= '-> arrow)
           (fail! "expected -> between the input rows and the output schema"))
@@ -1577,6 +1610,7 @@
         (when (arg-vector? body)
           (fail! (str "args are bound from the rows: drop the argument vector " (pr-str (first body)))))
         (let [_ @project-settings ; a bad defn-typed.edn fails the first definition
+              [input out-schema] (with-type-vars {:fail! fail! :type-vars type-vars :input input :out-schema out-schema})
               table (table-rows fail! input)
               _ (when-let [paths (seq (entry-default-paths table))]
                   (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))

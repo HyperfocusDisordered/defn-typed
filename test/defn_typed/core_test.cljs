@@ -119,3 +119,21 @@
                (core/malli-reasons {:explain m/explain :error-message me/error-message} data)))))
     (finally
       (mi/unstrument! {:filters [(mi/-filter-ns 'defn-typed.core-test)]}))))
+
+(defmeta first-of
+  {:doc "Первый элемент списка — того же типа, что его элементы."
+   :inout-tests [[{:xs [3 4]} 3]
+                 [{:xs []}    nil]]})
+
+(defn-typed first-of [T] {:xs [:sequential T]} -> [:maybe T]
+  (first xs)
+)
+
+(deftest type-variables
+  (testing "cljs: the same expansion as clj, each type variable [:any {:defn-typed/type-var \"T\"}] in the schemas (Typed Clojure is clj only); the cases pass, malli validates any items"
+    (is (= [:map [:xs [:sequential [:any {:defn-typed/type-var "T"}]]]] first-of-props))
+    (is (= '[:=> [:cat first-of-props] [:maybe [:any {:defn-typed/type-var "T"}]]] (:malli/schema (meta #'first-of))))
+    (is (= {:var `first-of :cases 2 :failures []} (core/check-var #'first-of)))
+    (is (= "a" (first-of {:xs ["a" "b"]})))
+    (is (m/validate first-of-props {:xs [:k 1 "s"]}))
+    (is (not (m/validate first-of-props {:xs 5})))))

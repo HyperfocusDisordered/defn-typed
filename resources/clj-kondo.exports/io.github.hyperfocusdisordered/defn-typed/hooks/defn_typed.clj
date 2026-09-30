@@ -1,6 +1,8 @@
 (ns hooks.defn-typed
   "clj-kondo hooks for defn-typed.core. defn-typed: rewrites
-   (defn-typed name {key schema …} -> <out-schema> body…) into the vars it expands to:
+   (defn-typed name {key schema …} -> <out-schema> body…) (or with type variables,
+   (defn-typed name [T …] {key schema …} -> <out-schema> body…), each T read as :any) into the vars
+   it expands to:
    (def <name>-props [:map …]), (defn name [m] (let [{:keys [k…]} m] (<name>--positional k…))) and
    (defn <name>--positional [k…] body…), the row keys bound as locals, so the name, the schemas, the
    body and a direct positional call lint like any defn; a table of more than 20 rows or a body
@@ -69,13 +71,30 @@
   [node]
   (and node (api/token-node? node) (symbol? (api/sexpr node))))
 
+(defn- with-any
+  "node with every symbol token of vars (the type variables) replaced by `:any`, at any depth, as
+   malli reads the macro's `[:any {:defn-typed/type-var \"T\"}]`."
+  [vars node]
+  (cond
+    (and (api/token-node? node) (contains? vars (api/sexpr node))) (with-meta (api/keyword-node :any) (meta node))
+    (:children node) (assoc node :children (map #(with-any vars %) (:children node)))
+    :else node))
+
 (defn- defn-typed-form [node]
   (let [[written-name & more] (rest (:children node))
         fn-name (if (name-node? written-name) written-name (api/token-node 'defn-typed-unnamed))
         [doc more] (if (api/string-node? (first more)) [(first more) (rest more)] [nil more])
         arrow? #(and (api/token-node? %) (= '-> (api/sexpr %)))
         [input [arrow & after-arrow]] (split-with (complement arrow?) more)
+        ;; a vector right before the input map lists the type variables, as in the macro
+        [type-vars input] (if (and (api/vector-node? (first input)) (next input)) [(first input) (rest input)] [nil input])
+        vars (set (keep #(let [s (api/sexpr %)] (when (simple-symbol? s) s)) (:children type-vars)))
         [out-schema & body] after-arrow
+        ;; the symbols the input and the output are written with, before the type variables become :any
+        written (fn [] (set (keep #(when (and (api/token-node? %) (symbol? (api/sexpr %))) (api/sexpr %))
+                                  (tree-seq :children :children (api/list-node (remove nil? (concat input [out-schema])))))))
+        input (map #(with-any vars %) input)
+        out-schema (some->> out-schema (with-any vars))
         table (first input)
         table? (and table (not (next input)) (api/map-node? table))
         finding! #(api/reg-finding! (assoc (meta %1) :message (str "defn-typed: " %2) :type :syntax))
@@ -107,6 +126,16 @@
                      row-nodes)]
     (when-not (name-node? written-name)
       (finding! written-name "the first argument must be the function's name"))
+    (when type-vars
+      (let [items (map api/sexpr (:children type-vars))
+            unused (remove (written) items)]
+        (cond
+          (not (and (seq items) (every? simple-symbol? items) (apply distinct? items)))
+          (finding! type-vars (str "the type variables are a vector of distinct symbols, got " (pr-str (vec items))))
+          (seq unused)
+          (finding! type-vars (str "no schema of the signature uses the type variable" (when (next unused) "s") " "
+                                   (apply str (interpose " " unused))))
+          :else nil)))
     (when (and table? (odd? (count (:children table))))
       (finding! table "the input map has a key without a schema: {key schema …}"))
     (doseq [[local ks] (group-by #(name (api/sexpr %)) (filter api/keyword-node? (take-nth 2 (:children (when table? table)))))

@@ -8,6 +8,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.walk]
+            [malli.clj-kondo :as mc]
             [malli.instrument :as mi]))
 
 (core/deftests! 'defn-typed.core)
@@ -182,7 +183,7 @@
 
 (deftest check-api
   (testing "check-ns = check-var over a namespace's registered vars and its vars carrying cases"
-    (is (= {`incremented 2 `padded 2 `shorter 2}
+    (is (= {`incremented 2 `padded 2 `shorter 2 `first-of 2}
            (into {} (map (juxt :var :cases)) (core/check-ns 'defn-typed.core-test)))))
   (testing "registered-vars lists what defmeta registered; undefined-metas names a defmeta nothing defined"
     (is (some #{#'padded} (core/registered-vars 'defn-typed.core-test)))
@@ -348,6 +349,59 @@
       (let [typed (hook-findings (format form "defn-typed"))]
         (is (seq typed) form)
         (is (= typed (hook-findings (format form "defnt"))) form)))))
+
+(defmeta first-of
+  {:doc "Первый элемент списка — того же типа, что его элементы."
+   :inout-tests [[{:xs [3 4]} 3]
+                 [{:xs []}    nil]]})
+
+(defn-typed first-of [T] {:xs [:sequential T]} -> [:maybe T]
+  (first xs)
+)
+
+(deftest type-variables
+  (testing "each type variable is [:any {:defn-typed/type-var \"T\"}] in every schema of the signature: <name>-props, :malli/schema"
+    (is (= [:map [:xs [:sequential [:any {:defn-typed/type-var "T"}]]]] first-of-props))
+    (is (= [:=> [:cat first-of-props] [:maybe [:any {:defn-typed/type-var "T"}]]] (:malli/schema (meta #'first-of)))))
+  (testing "the expansion is the one of the signature with that schema written in each type variable's place, at any depth"
+    (let [expand #(binding [*ns* (the-ns 'defn-typed.core-test)] (gensyms-numbered (macroexpand-1 %)))
+          t [:any {:defn-typed/type-var "T"}]]
+      (is (= (expand (list 'defn-typed.core/defn-typed 'g {:xs [:sequential t] :n [:tuple t :int] :m [:map-of :keyword t]}
+                           '-> [:maybe t] '(first xs)))
+             (expand '(defn-typed.core/defn-typed g [T] {:xs [:sequential T] :n [:tuple T :int] :m [:map-of :keyword T]}
+                        -> [:maybe T] (first xs)))))))
+  (testing "malli reads :any: the cases pass; instrumented, items of any type go through and a value that is not a sequence does not; clj-kondo's type is the one of :any"
+    (is (= {:var `first-of :cases 2 :failures []} (core/check-var #'first-of)))
+    (mi/collect! {:ns ['defn-typed.core-test]})
+    (mi/instrument! {:filters [(mi/-filter-var #{#'first-of})]})
+    (try
+      (let [strings {:xs ["a" "b"]}
+            number {:xs 5}]
+        (is (= "a" (first-of strings)))
+        (is (= :malli.core/invalid-input (:type (try (first-of number) nil (catch clojure.lang.ExceptionInfo e (ex-data e)))))))
+      (finally
+        (mi/unstrument! {:filters [(mi/-filter-var #{#'first-of})]})))
+    (is (= (mc/transform [:map [:xs [:sequential :any]]]) (mc/transform first-of-props))))
+  (testing "a vector that is not distinct symbols, or a type variable no schema uses, fails at compile time naming the fn"
+    (let [error #(try (macroexpand-1 %) (catch Exception e (ex-message (or (ex-cause e) e))))]
+      (is (= "defn-typed f: no schema of the signature uses the type variable U"
+             (error '(defn-typed.core/defn-typed f [T U] {:xs [:sequential T]} -> T (first xs)))))
+      (is (= "defn-typed f: no schema of the signature uses the type variables U V"
+             (error '(defn-typed.core/defn-typed f [T U V] {:xs [:sequential T]} -> T (first xs)))))
+      (is (= "defn-typed f: the type variables are a vector of distinct symbols, got [T 1]"
+             (error '(defn-typed.core/defn-typed f [T 1] {:xs [:sequential T]} -> T (first xs)))))
+      (is (= "defn-typed f: the type variables are a vector of distinct symbols, got [T T]"
+             (error '(defn-typed.core/defn-typed f [T T] {:xs [:sequential T]} -> T (first xs)))))
+      (is (= "defn-typed f: the type variables are a vector of distinct symbols, got []"
+             (error '(defn-typed.core/defn-typed f [] {:xs :int} -> :int xs))))
+      (is (= "defn-typed f: the input is a map: {key schema …}"
+             (error '(defn-typed.core/defn-typed f [T] -> T 1))))))
+  (testing "the clj-kondo hook lints the type variables as :any and reports the same problems"
+    (is (= [] (hook-findings "(defn-typed first-of [T] {:xs [:sequential T]} -> [:maybe T]\n  (first xs)\n)\n(first-of {:xs [1]})")))
+    (is (= [[2 "defn-typed: no schema of the signature uses the type variable U"]]
+           (hook-findings "(defn-typed f [T U] {:xs [:sequential T]} -> T (first xs))")))
+    (is (= [[2 "defn-typed: the type variables are a vector of distinct symbols, got [T 1]"]]
+           (hook-findings "(defn-typed f [T 1] {:xs [:sequential T]} -> T (first xs))")))))
 
 (def ^:private order-fixture
   "Namespace k (after hook-findings' ns line): a defn-typed under its defmeta whose body leaves
