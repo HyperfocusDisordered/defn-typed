@@ -15,8 +15,7 @@ output type, body.
 TypeScript
 
 ```typescript
-function orderTotal({ price, qty = 1, discount = 0 }:
-  { price: number; qty?: number; discount?: number }): number
+function orderTotal(price: number, qty: number = 1, discount: number = 0): number
 ```
 
 Kotlin
