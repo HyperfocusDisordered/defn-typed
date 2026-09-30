@@ -44,6 +44,9 @@
 
 (defn var-name [v] (symbol v))
 
+;; the :report-success load report (defined after load-scope), fed from the checks above it
+#?(:clj (declare ^:private update-load-report! ^:private load-failed!))
+
 (defn- pairs-check!
   "Throws, naming sym, unless pairs is nil (no cases) or a vector of [[args…] expected] pairs."
   [sym pairs]
@@ -52,6 +55,7 @@
                   (vector? pairs) (some #(when-not (pair? %) [%]) pairs)
                   :else [pairs])]
     (when bad
+      #?(:clj (some-> (namespace sym) symbol load-failed!))
       (throw (ex-info (str "defn-typed: " sym " cases must be a vector of [[args…] expected] pairs, got "
                            (pr-str (first bad)))
                       {:var sym :case (first bad)})))))
@@ -80,6 +84,7 @@
   [sym pairs]
   (let [bad (if (vector? pairs) (some #(when-not (and (vector? %) (= 2 (count %))) [%]) pairs) [pairs])]
     (when bad
+      #?(:clj (some-> (namespace sym) symbol load-failed!))
       (throw (ex-info (str "defn-typed: " sym " defmeta cases must be a vector of [in expected] pairs, got "
                            (pr-str (first bad)))
                       {:var sym :case (first bad)})))
@@ -152,7 +157,8 @@
                   (apply str (interpose " " (map pr-str unknown-keys)))
                   " — the keys are " (apply str (interpose " " (map pr-str row-keys))))]
     (if (= :error mode)
-      (throw (ex-info text {:fn fn-name :unknown-keys unknown-keys :keys row-keys}))
+      (do #?(:clj (load-failed! (ns-name *ns*)))
+          (throw (ex-info text {:fn fn-name :unknown-keys unknown-keys :keys row-keys})))
       (let [pair [fn-name (set unknown-keys)]
             [before after] (swap-vals! unknown-keys-reported remember-report pair)
             line (cond
@@ -162,7 +168,8 @@
                    ;; known pair, or muted: nothing to print
                    :else nil)]
         (when line
-          #?(:clj (binding [*out* *err*] (println line))
+          #?(:clj (do (load-failed! (ns-name *ns*))
+                      (binding [*out* *err*] (println line)))
              :cljs (js/console.warn line)))))))
 
 (defonce ^{:doc "The fn that builds the checker of a `:malli-in-prod` function from its slot's spec, or nil.
@@ -508,7 +515,8 @@
       :inline [true false]
       :stale-callers [:reload :warn :off]
       :typed-check [:warn :error :off]
-      :inout-check [:warn :error :off]}))
+      :inout-check [:warn :error :off]
+      :report-success [false true]}))
 
 #?(:clj
    (defn- setting-value-problem
@@ -531,7 +539,7 @@
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
       `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn
-      :inout-check :warn}`,
+      :inout-check :warn :report-success false}`,
       merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
       outside the key's allowed ones."
@@ -561,7 +569,8 @@
 #?(:clj
    (defn- setting
      "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
-      (`defn-typed.inline`: anything but `false` is on; `defn-typed.literal-check`,
+      (`defn-typed.inline`: anything but `false` is on; `defn-typed.report-success`: `true` is on,
+      anything else off; `defn-typed.literal-check`,
       `defn-typed.unknown-keys`, `defn-typed.typed-check` and `defn-typed.inout-check`: `warn`, `error`
       or `off`; `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's
       defn-typed.edn, else the default. A function's own `:literal-check` / `:unknown-keys` /
@@ -571,6 +580,7 @@
        (cond
          (nil? property) (get @project-settings k)
          (= :inline k) (not= "false" property)
+         (= :report-success k) (= "true" property)
          (some #{(keyword property)} (get setting-values k)) (keyword property)
          :else (throw (ex-info (str "defn-typed: the system property defn-typed." (name k)
                                     " must be one of " (apply str (interpose ", " (map name (get setting-values k))))
@@ -721,6 +731,7 @@
                      (str (pr-str error-type) " " (pr-str (dissoc data :form)))
                      ;; not a malli error: the exception's class and message
                      (str (.getName (class e)) " " (ex-message e)))]
+         (load-failed! (symbol (namespace f)))
          (throw (ex-info (str "defn-typed: " f " — invalid schema for " (if output "the output" (pr-str row)) ": "
                               hint cause " (" (project-path file) ":" line ")")
                          (merge {:fn f :schema schema :malli/error error} (select-keys item [:row :output]))))))))
@@ -1006,6 +1017,7 @@
              (when (and mismatches (not= :off literal-check))
                (let [text (str "defn-typed " file ":" line ": (" (name (:name spec)) " …) "
                                (apply str (interpose "; " mismatches)))]
+                 (when-not cljs? (load-failed! (ns-name *ns*)))
                  (if (= :error literal-check)
                    (throw (ex-info text {::literal-mismatches (vec mismatches)}))
                    (binding [*out* *err*]
@@ -1092,10 +1104,12 @@
       (reload-namespace!; its literal calls are judged again, so an incompatible one shows its
       warning) and prints `defn-typed: <f> changed its signature, reloaded callers: <ns>, …`;
       `:warn` prints `defn-typed: <f> changed its signature; callers compiled with the old one:
-      <ns>, … — reload them`; `:off` does neither. Returns v."
+      <ns>, … — reload them`; `:off` does neither. Records v among the functions its namespace's
+      load defines (update-load-report!). Returns v."
      [v signature]
      (let [f (symbol v)
            previous (get (first (swap-vals! signatures assoc f signature)) f)]
+       (update-load-report! (symbol (namespace f)) #(update % :fns conj f))
        (when (and previous (not= previous signature))
          (let [callers (->> (disj (get @inlined-callers f) (symbol (namespace f)))
                             (remove loading?)
@@ -1293,6 +1307,12 @@
        (when (and form (not= :off mode) (not (loading? 'defn-typed.typed-clojure)) @typed-bridge-loaded)
          (check-var-schemas! v)
          (let [[kind findings] (typed-findings {:v v :form form :file file})]
+           (update-load-report! (symbol (namespace f))
+                                (case kind
+                                  :findings (if (seq findings) #(assoc % :failed true) #(update % :typed-ok conj f))
+                                  :failed #(assoc % :failed true)
+                                  ;; over the deadline or out of stack: not checked, not failed
+                                  :skipped identity))
            (case kind
              :skipped (print-err! (str "defn-typed: Typed Clojure check of " f " skipped (" findings ")"))
              :failed (print-err! (str "defn-typed: Typed Clojure check of " f " failed: " findings))
@@ -1364,6 +1384,118 @@
      (some-> ^clojure.lang.Var (if cljs? (resolve 'cljs.analyzer/*file-defs*) #'*file*) .getThreadBinding)))
 
 #?(:clj
+   (defonce ^{:private true
+              :doc "`{[<ns> <scope>] {:thread :loads :err :began :fns #{<fn> …} :cases n :typed-ok #{<fn> …}
+      :failed bool}}`, with `:report-success` on: each file load of a namespace in progress, or ended
+      and not yet reported. `<scope>` = the load's load-scope; `:thread` the thread loading it and
+      `:loads` its load-depth there; `:err` the *err* the load printed to; `:began` System/nanoTime at
+      its first entry; `:fns` the defn-typed functions it defined (signature!); `:cases` the in/out
+      cases it ran (inout-run!); `:typed-ok` the functions Typed Clojure checked with no finding
+      (typed-check!); `:failed` whether a defn-typed check reported a failure (load-failed!)."}
+     load-reports
+     (atom {})))
+
+#?(:clj
+   (defonce ^:private load-reports-lock
+     ;; held while a flush removes ended loads and prints their lines
+     (Object.)))
+
+#?(:clj
+   (defn- load-depth
+     "How many `clojure.lang.Compiler.load` frames thread's stack holds: at least one while a file
+      loads on it (require, load-file, an editor's load-file op), more while another file's load
+      nests inside (the one-argument overload adds a frame of its own); 0 outside a file load (a
+      form evaluated at a REPL)."
+     [^Thread thread]
+     (count (filter (fn [^StackTraceElement frame]
+                      (and (= "load" (.getMethodName frame)) (= "clojure.lang.Compiler" (.getClassName frame))))
+                    (.getStackTrace thread)))))
+
+#?(:clj
+   (defn- success-line
+     "`defn-typed ✓ <ns>: <N> fns · <M> in/out cases · types ok` for a load's report: `types ok`
+      when Typed Clojure checked every function of it with no finding, else `types skipped`."
+     [ns-sym {:keys [fns cases typed-ok]}]
+     (str "defn-typed ✓ " ns-sym ": " (count fns) " fns · " cases " in/out cases · "
+          (if (= fns typed-ok) "types ok" "types skipped"))))
+
+#?(:clj
+   (defn- flush-load-reports!
+     "Removes the loads of load-reports for which (ended? [ns scope] report) holds and prints, in the
+      order they began, the success-line of each that defined a function and reported no failure, to
+      that load's *err*. Under load-reports-lock: a caller returns once every line removed so far is
+      printed."
+     [ended?]
+     (locking load-reports-lock
+       (let [[before after] (swap-vals! load-reports #(into {} (remove (fn [[k report]] (ended? k report))) %))]
+         (doseq [[[ns-sym] report] (sort-by (comp :began val) (apply dissoc before (keys after)))
+                 :when (and (seq (:fns report)) (not (:failed report)))]
+           (binding [*err* (:err report)]
+             (print-err! (success-line ns-sym report))))))))
+
+#?(:clj
+   (defn- flush-ended-loads!
+     "Reports every load of load-reports that ended: its thread is gone, or holds fewer Compiler.load
+      frames than while the load ran (load-depth). One stack sample per thread."
+     []
+     (let [depths (into {} (for [^Thread thread (distinct (map :thread (vals @load-reports)))]
+                             [thread (if (.isAlive thread) (load-depth thread) 0)]))]
+       (flush-load-reports! (fn [_ {:keys [thread loads]}] (< (get depths thread loads) loads))))))
+
+#?(:clj
+   (def load-report-poll-ms
+     "How often the success-line thread looks for ended loads, 25 ms: the line of a load prints at
+      most this long after the load ends. Each look reads one stack per loading thread; with no load
+      in progress it reads nothing."
+     25))
+
+#?(:clj
+   (defonce ^:private load-report-watcher
+     ;; the daemon thread that reports ended loads (flush-ended-loads!), started with the first report
+     (delay
+       (doto (Thread. ^Runnable (fn []
+                                  (loop []
+                                    (Thread/sleep (long load-report-poll-ms))
+                                    (when (seq @load-reports)
+                                      (try (flush-ended-loads!)
+                                           (catch Throwable e
+                                             (print-err! (str "defn-typed: the success line failed: " (innermost-message e))))))
+                                    (recur)))
+                      "defn-typed-report-success")
+         (.setDaemon true)
+         (.start)))))
+
+#?(:clj
+   (defn- update-load-report!
+     "With `:report-success` on, while a file loads on this thread (load-depth): applies f to the
+      report of this load of ns-sym (load-reports), a fresh one on its first entry. An earlier load of
+      ns-sym on this thread has ended by then: it is reported first. Nothing otherwise, and nothing
+      while defn-typed.typed-clojure loads (the library's own definitions). nil."
+     [ns-sym f]
+     ;; the scope first: code loaded without a file binding (AOT classes) never reads the settings
+     (when-let [scope (load-scope false)]
+       (when (and (setting :report-success) (not (loading? 'defn-typed.typed-clojure)))
+         (let [k [ns-sym scope]
+               thread (Thread/currentThread)]
+           (if (contains? @load-reports k)
+             (swap! load-reports update k f)
+             (let [loads (load-depth thread)]
+               (flush-load-reports! (fn [[n s] report] (and (= ns-sym n) (not (identical? scope s))
+                                                            (identical? thread (:thread report)))))
+               (when (pos? loads)
+                 @load-report-watcher
+                 (swap! load-reports assoc k (f {:thread thread :loads loads :err *err* :began (System/nanoTime)
+                                                 :fns #{} :cases 0 :typed-ok #{} :failed false}))))))))
+     nil))
+
+#?(:clj
+   (defn- load-failed!
+     "Marks this load of ns-sym as failed (update-load-report!): a defn-typed check printed or threw a
+      failure, so the load prints no success-line."
+     [ns-sym]
+     (update-load-report! ns-sym #(assoc % :failed true))))
+
+#?(:clj
    (defn- dev-only
      "form as it runs in a dev build: cljs under goog.DEBUG (a release build drops it), clj as is."
      [cljs? form]
@@ -1425,9 +1557,11 @@
       one line naming the function, the row, malli's error and the file:line; a schema holding a
       symbol or a call is judged as the definition loads (check-var-schemas!), and so is every
       schema of a definition the Typed Clojure bridge registers."
-     ([] (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {})))
+     ([] (when-not (:ns &env) (load-failed! (ns-name *ns*)))
+         (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {})))
      ([fn-name & more]
-      (let [fail! #(throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name}))
+      (let [fail! #(do (when-not (:ns &env) (load-failed! (ns-name *ns*)))
+                       (throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name})))
             _ (when-not (symbol? fn-name)
                 (fail! "the first argument must be the function's name"))
             _ (when (string? (first more))
@@ -1641,7 +1775,8 @@
       project's; a bad value fails here. Written below a defn-typed of the same load, it runs the
       cases there (inout-check!), the defn-typed having found none above it."
      [fn-name m]
-     (let [fail! #(throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name}))
+     (let [fail! #(do (when-not (:ns &env) (load-failed! (ns-name *ns*)))
+                      (throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name})))
            cljs? (boolean (:ns &env))
            dev #(dev-only cljs? %)]
        (when-not (symbol? fn-name)
@@ -1944,7 +2079,9 @@
   "Runs the cases of check's var (all, or `:only` the one of that index) as check-var runs them and
    reports the failing ones (report-cases! with `:mode`, at `:file` `:line`, the defmeta's). A case that threw because it called a function not defined yet is not reported:
    clj defers it (defer-case!) until one of its namespace's unbound vars is defined; cljs skips it
-   (it threw while one of `:pending`, the vars declared above but not yet defined, is undefined)."
+   (it threw while one of `:pending`, the vars declared above but not yet defined, is undefined).
+   clj counts the cases it ran, and a reported failure, into the namespace's load report
+   (update-load-report!)."
   [{:keys [var mode file line only] :as check}]
   (let [results (for [[i :as c] (var-cases var) :when (or (nil? only) (= i only))] (run-case var c))
         waiting? (fn [{e ::thrown}]
@@ -1955,6 +2092,9 @@
                     :let [vars (unbound-vars (symbol (namespace (symbol var))))]
                     :when (seq vars)]
               (defer-case! {:check check :i i :vars vars})))
+    #?(:clj (update-load-report! (symbol (namespace (symbol var)))
+                                 #(cond-> (update % :cases + (count (remove waiting? results)))
+                                    (seq (remove waiting? failures)) (assoc :failed true))))
     (report-cases! mode (for [result (remove waiting? failures)]
                           (case-text {:file file :line line
                                       :f (var-name var) :result result})))))

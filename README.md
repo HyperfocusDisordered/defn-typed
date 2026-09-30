@@ -458,8 +458,9 @@ shadow-cljs run in `miniapp/`, and a nearer file overrides it. It is read once p
 first macroexpansion; no file = the defaults.
 
 ```clojure
-{:literal-check :warn   ; :warn (default) | :error
- :inline        true}   ; true (default) | false
+{:literal-check  :warn   ; :warn (default) | :error
+ :inline         true    ; true (default) | false
+ :report-success false}  ; false (default) | true
 ```
 
 - `:literal-check`: a literal call that fails its compile-time check (see Compile-time literal
@@ -468,9 +469,25 @@ first macroexpansion; no file = the defaults.
   Clojure and ClojureScript alike.
 - `:inline`: whether a fitting literal call compiles to the positional call in Clojure (see
   Zero-cost calls). ClojureScript decides by the build: on in release, off in dev.
+- `:report-success`: after a file loads (`require`, `load-file`, an editor's load-file), one line
+  per namespace whose defn-typed checks all passed (schemas, in/out cases, Typed Clojure), on the
+  stream the `WARNING` lines use:
+
+  ```
+  defn-typed ✓ shop.order: 3 fns · 7 in/out cases · types ok
+  ```
+
+  `types ok` when Typed Clojure checked every function of the namespace with no finding, else
+  `types skipped` (Typed Clojure not on the classpath, a function's `:typed-check :off`, a check
+  past its deadline). A namespace with a failure (a `WARNING` line, a check that stopped the load)
+  gets no line. Off by default: like malli's instrumentation and spec, a passing check prints
+  nothing. Clojure only. The line comes within 25 ms after the load ends; a form evaluated at the
+  REPL, outside a file load, gets none; a load stopped by an error outside defn-typed (a syntax
+  error further down) still reports the definitions before it.
 
 A JVM system property wins over the file, the file over the default:
-`-Ddefn-typed.literal-check=warn|error`, `-Ddefn-typed.inline=false` (any other value is on). An
+`-Ddefn-typed.literal-check=warn|error`, `-Ddefn-typed.inline=false` (any other value is on),
+`-Ddefn-typed.report-success=true` (any other value is off). An
 unknown key, or a value outside its list, is an error naming the key and the allowed values.
 
 Strict mode, a literal that fails the check does not compile:
