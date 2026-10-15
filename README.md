@@ -281,8 +281,8 @@ all 14; `typed_clojure_test.clj` asserts each one):
 clj-kondo here = the exported hooks plus the types of step 2 above (defn-typed.kondo); with the hooks alone it
 finds 1 of 7 (a `:string` result used as a number).
 
-Timing: about 17 ms per form on a warm JVM (an application namespace); the fixture's 21 forms take
-121 ms together (median 5 ms, slowest 23 ms). Check form by form, each with a deadline: over a very
+Timing: the fixture's 33 top-level forms take about 330 ms together on a warm JVM (median 7 ms,
+slowest 60 to 100 ms; `check-form!` per form, three passes after a warm-up, JVM 21). Check form by form, each with a deadline: over a very
 large namespace, a whole-file `check-ns` may exhaust the checker's stack, and a checker thread that
 runs away cannot be stopped, only abandoned (restart the JVM).
 
@@ -492,8 +492,9 @@ The switch, the `:inline` setting:
 - **ClojureScript**: on in a release build (`:optimizations :advanced`), off in dev, where the call
   stays the map call and is checked (see [Compile-time literal checks](#compile-time-literal-checks)).
   Calls through an alias (`c/order-total`), a `:refer`red name, a qualified name, or inside the
-  defining namespace are covered. In the release JS such a call builds no map:
-  `(c/order-total {:price p :qty 3})` came out as `quot(300 * p, 100)`.
+  defining namespace are covered. In a release build such a call reaches the positional function
+  directly: `refer_inline_test.cljs`, run in the `:advanced` `inline` build, redefines the map
+  function and the call does not see it.
 
 A rewritten call skips `<name>`, so instrumentation does not see it: dev, REPL and test builds keep
 the switch off, where every call goes through the var. With it on, a caller compiled earlier still
@@ -508,9 +509,9 @@ defn-typed: shop.price/order-total changed its signature; callers compiled with 
 
 `:stale-callers :reload` reloads them itself (see [Configuration](#configuration)).
 
-A 3-row function with 2 defaults, `(total {:price p :qty 3})`, criterium `quick-bench` on JVM 21:
-positional `defn` 36 ns, switch off 51 ns, switch on 28 ns (0.1.4, which filled the defaults by
-walking the schema at every call: 814 ns).
+A 3-row function with 2 defaults, `(total {:price p :qty 3})`, criterium `quick-bench` on JVM 21,
+each against a positional `defn` of the same body in the same JVM: switch on 11.6 ns (positional
+12.4 ns), switch off 24.6 ns (positional 20.9 ns).
 
 ### Compile-time literal checks
 
@@ -723,10 +724,7 @@ unchecked and prints one line: `:malli-in-prod on <fn> but defn-typed.malli-in-p
 loaded`. A cljs release with no opted-in function and no require has no malli code, as before.
 
 - **What runs**: the input validator and the output validator, compiled once per function. On
-  success nothing else runs and nothing is allocated: 72 bytes per call plain and 72 checked in
-  the benchmark harness. On JVM 21 a 3-row function took 21 ns plain and 66 to 104 ns checked
-  across runs; its two validators alone took 19 ns. The functions without `:malli-in-prod`
-  are unchanged.
+  success nothing else runs. The functions without `:malli-in-prod` are unchanged.
 - **Guarantees**:
   - the function always returns its normal result;
   - the check never throws into the caller;
@@ -773,10 +771,9 @@ further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints
 arrow and the body as the `def` and the two `defn`s above, with the row keys as locals, so a direct
 `name--positional` call resolves and its arity is checked, and reports the same shape errors as the
 macro; a row the body never reads is clj-kondo's `unused binding` at its key; the `defn` it lints
-carries the `:doc` of the `defmeta` above, so clojure-lsp's hover shows it. The `defmeta` hook
-lints the map as code. The exported config keeps clojure-lsp from
-reporting `name-props` and `name--positional` as unused public vars (checked with clojure-lsp
-2026.07.06).
+carries the `:doc` of the `defmeta` above, in clj-kondo's analysis, which clojure-lsp's hover reads.
+The `defmeta` hook lints the map as code. The exported config excludes `name-props` and
+`name--positional` from clojure-lsp's `unused-public-var` (`:exclude-regex`).
 
 ## Running the examples
 
