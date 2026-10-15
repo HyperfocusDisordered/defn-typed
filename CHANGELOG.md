@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 (2026-10-15)
 
 - `defn-typed.kondo/emit! {:src-dirs [...] :out path}` (CLI `clojure -M -m defn-typed.kondo --src-dir
   src --out <path>`) writes the clj-kondo types of every `defn-typed` / `defnt` and every `defn`
