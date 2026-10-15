@@ -1,7 +1,7 @@
 (ns defn-typed.kondo
   "clj-kondo types for the functions of a source tree, read from the source without loading it:
-   `(emit! {:src-dirs [\"src\"] :out \".clj-kondo/configs/malli/config.edn\"})`, or from a shell
-   `clojure -M -m defn-typed.kondo --src-dir src --out .clj-kondo/configs/malli/config.edn`.
+   `(emit! {:src-dirs [\"src\"] :out \".clj-kondo/imports/defn-typed/types/config.edn\"})`, or from a shell
+   `clojure -M -m defn-typed.kondo --src-dir src --out .clj-kondo/imports/defn-typed/types/config.edn`.
    Reading the source covers .cljs files, whose schemas exist only at run time in a browser, and
    needs no loaded namespaces, so an after-edit hook can call emit! in any warm JVM."
   (:require [clojure.java.io :refer [file make-parents]]
@@ -181,7 +181,7 @@
 (def usage
   "The CLI's --help text."
   "Writes the clj-kondo types of the typed functions under the source dirs (defn-typed.kondo/emit!).
-  clojure -M -m defn-typed.kondo --src-dir src --src-dir test --out .clj-kondo/configs/malli/config.edn")
+  clojure -M -m defn-typed.kondo --src-dir src --src-dir test --out .clj-kondo/imports/defn-typed/types/config.edn")
 
 (defn cli-options
   "{:src-dirs [...] :out path} from the CLI's args, `{:help true}` for --help, `{:error message}`

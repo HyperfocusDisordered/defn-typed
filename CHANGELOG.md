@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `defn-typed.kondo/emit! {:src-dirs [...] :out path}` (CLI `clojure -M -m defn-typed.kondo --src-dir
+  src --out <path>`) writes the clj-kondo types of every `defn-typed` / `defnt` and every `defn`
+  with `:malli/schema` under the dirs, read from the source (`.clj`, `.cljc`, `.cljs`) without
+  loading it; output canonical, written only on change. `defn-typed.core/form-parts` = the macro's
+  reading of a form, public. README "Editor types (clj-kondo)" replaces the manual
+  `malli.clj-kondo/emit!` / `:node-script` recipe.
 - `:dev` setting (`-Ddefn-typed.dev=true`), the Clojure analogue of `goog.DEBUG`, off by default:
   a release JVM loading a namespace only defines the functions — no in/out cases, no `defmeta`
   registrations, no unknown-key check on real-map calls, no instrumentation upkeep, no
