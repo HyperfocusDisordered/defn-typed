@@ -69,3 +69,7 @@
       (is (= "defn-typed: dev-flag.on/tripled unknown key :zz — the keys are :n :q\n" call))
       (is (= {:registered? true :watches 1 :signature? true}
              (select-keys result [:registered? :watches :signature?]))))))
+
+(deftest instrument-is-a-no-op-without-dev
+  (testing "defn-typed.core/instrument! with :dev off: nil, nothing instrumented"
+    (is (nil? (with-dev "false" #(core/instrument! {:filters [(fn [_ _ _] false)]}))))))

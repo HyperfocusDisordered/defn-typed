@@ -64,7 +64,7 @@ then the typed function: plain data, in that order, nothing else.
 
 Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
 range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
-after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
+after `(malli.dev/start!)`, in tests after `(defn-typed.core/instrument!)`. Without instrumentation
 nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
 functions in, see malli in production). Literal calls such
 as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
@@ -579,10 +579,24 @@ call; their aliases set the properties (the file is shared with production build
 
 ## Checks run in dev/test only
 
-- **Clojure**: a loader namespace on the test/REPL classpath only (never on the server's) requires
-  the app and runs `(malli.instrument/collect! {:ns …})` + `(malli.instrument/instrument!)`. A bad
-  call then throws `:malli.core/invalid-input` / `:malli.core/invalid-output`. A plain
-  `(require 'ns :reload)` redefines the vars un-instrumented; re-collect + instrument after it.
+- **Clojure**: a loader namespace on the test/REPL classpath only (never on the server's), in a
+  JVM with `-Ddefn-typed.dev=true`, requires the app and runs `(malli.instrument/collect! {:ns …})`
+  + `(defn-typed.core/instrument!)`. A bad call then throws `:malli.core/invalid-input` /
+  `:malli.core/invalid-output` (ex-data as malli builds it) with a message naming the function,
+  the key, the expected schema and the value:
+
+  ```
+  defn-typed: shop.price/order-total — invalid :qty: expected [:int {:min 1}], got 0
+  ```
+
+  `defn-typed.core/instrument!` takes malli's `instrument!` options (`:filters`, `:report`,
+  `:scope`, `:gen`); a `:report` of yours wins over that message. A definition loaded again is
+  re-instrumented with the same options. `(malli.instrument/instrument!)` works too, with malli's
+  message (`:malli.core/invalid-input`) and malli's default options after a redefinition. With
+  `:dev` off, `defn-typed.core/instrument!` does nothing and returns nil.
+  A private function is instrumented too: malli's `collect!` reads public vars only, so in dev a
+  private definition registers its own schema. A plain `(require 'ns :reload)` keeps the
+  instrumentation of every defn-typed function it redefines.
 - **ClojureScript**: the app calls `malli.dev.cljs/start!` under a dev define; the release build
   aliases it away (`:build-options {:ns-aliases {malli.dev.cljs malli.dev.cljs-noop}}`).
   `defmeta`'s registrations (cases, `:meta`, `#'f`) sit under `goog.DEBUG`, so a release build

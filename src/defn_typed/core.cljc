@@ -1238,19 +1238,22 @@
      nil))
 
 #?(:clj
+   (declare instrument-options-for))
+
+#?(:clj
    (defn keep-instrumented!
      "Called by a clj defn-typed definition right after its defn, with its var v: when
       instrumented-before! recorded it, registers v's function schema with malli
-      (malli.instrument/-collect!, what collect! does for one var) and instruments v alone
-      (malli.instrument/instrument! with default options, so a reporter malli.dev/start! captured
-      on malli.core/-fail! still applies; instrumenting unwraps first, so one wrapper). malli is
-      resolved, never required: that var being instrumented means it is loaded. Returns v."
+      (malli.instrument/-collect!, what collect! does for one var) and instruments v alone with the
+      options the last defn-typed.core/instrument! got (instrument-options-for; malli's defaults
+      when the instrumentation came from malli's own instrument!, so a reporter malli.dev/start!
+      captured on malli.core/-fail! still applies; instrumenting unwraps first, so one wrapper).
+      malli is resolved, never required: that var being instrumented means it is loaded. Returns v."
      [v]
      (let [f (symbol v)]
        (when (contains? (first (swap-vals! instrumented-definitions disj f)) f)
          ((resolve 'malli.instrument/-collect!) v)
-         ((resolve 'malli.instrument/instrument!)
-          {:filters [(fn [n s _] (= f (symbol (str n) (str s))))]}))
+         ((resolve 'malli.instrument/instrument!) (instrument-options-for f)))
        v)))
 
 #?(:clj
@@ -1972,12 +1975,11 @@
     [:map [:s [:vector [:maybe [:map [:q {:optional true} [:int {:default 1}]]]]]]]]
    [[:int]                                    :int]])
 
-(defn malli-reasons
-  "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
-   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data.
-   defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
-   :error-message malli.error/error-message}."
-  [{:keys [explain error-message]} {:keys [type data]}]
+(defn- malli-errors
+  "malli's errors for the ex-data of a :malli.core/invalid-input ∨ :malli.core/invalid-output, each
+   with `:path`, its key path inside the one argument (a function of one argument) ∨ the args
+   (several) ∨ the result, and `:missing?`; nil for any other ex-data."
+  [explain {:keys [type data]}]
   (let [[schema value single-arg?]
         (case type
           :malli.core/invalid-input [(:input data) (:args data) (= 1 (count (:args data)))]
@@ -1985,11 +1987,21 @@
           ;; any other exception carries no malli explanation
           nil)]
     (when schema
-      (vec (for [{:keys [in value] :as error} (:errors (explain schema value))
-                 :let [path (if single-arg? (vec (rest in)) (vec in))
-                       missing? (= :malli.core/missing-key (:type error))]]
-             (str (path-text path) " · " (error-message error)
-                  (if missing? " · missing" (str " · got " (pr-str value)))))))))
+      (for [{:keys [in] :as error} (:errors (explain schema value))]
+        (assoc error
+               :path (if single-arg? (vec (rest in)) (vec in))
+               :missing? (= :malli.core/missing-key (:type error)))))))
+
+(defn malli-reasons
+  "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
+   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data.
+   defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
+   :error-message malli.error/error-message}."
+  [{:keys [explain error-message]} ex-data]
+  (when-let [errors (malli-errors explain ex-data)]
+    (vec (for [{:keys [path value missing?] :as error} errors]
+           (str (path-text path) " · " (error-message error)
+                (if missing? " · missing" (str " · got " (pr-str value))))))))
 
 (defn- case-source
   "v's registered entry when it carries cases (a `defmeta` without `:inout-tests` registers only
@@ -2216,6 +2228,75 @@
      (try {:explain (requiring-resolve 'malli.core/explain)
            :error-message (requiring-resolve 'malli.error/error-message)}
           (catch Exception _ nil))))
+
+#?(:clj
+   (defn- invalid-call-text
+     "The message of a malli rejection (ex-data of a :malli.core/invalid-input ∨ -output, with the
+      `:fn-name` malli's instrument! adds under a `:report`): `defn-typed: <fn> — invalid <key path>:
+      expected <schema>, got <value>` per failing key (`invalid <key path>: missing required key`;
+      the result's path reads `output`), joined by `; `."
+     [ex-data]
+     (let [explain (requiring-resolve 'malli.core/explain)
+           form (requiring-resolve 'malli.core/form)
+           output? (= :malli.core/invalid-output (:type ex-data))]
+       (str "defn-typed: " (or (:fn-name (:data ex-data)) "an instrumented function") " — "
+            (clojure.string/join
+             "; "
+             (for [{:keys [path value missing? schema]} (malli-errors explain ex-data)
+                   :let [where (cond (and output? (empty? path)) "output"
+                                     output? (str "output " (path-text path))
+                                     :else (path-text path))]]
+               (if missing?
+                 (str "invalid " where ": missing required key")
+                 (str "invalid " where ": expected " (pr-str (form schema)) ", got " (pr-str value)))))))))
+
+#?(:clj
+   (defn report-invalid-call!
+     "The `:report` defn-typed.core/instrument! gives malli unless its options carry one: malli's
+      own report (malli.core/-fail!, so a reporter malli.dev/start! captured there still runs) whose
+      exception is thrown again with invalid-call-text as its message, the ex-data and cause
+      unchanged. A -fail! that returns instead of throwing: its value."
+     [type data]
+     (try ((requiring-resolve 'malli.core/-fail!) type data)
+          (catch clojure.lang.ExceptionInfo e
+            (throw (ex-info (invalid-call-text (ex-data e)) (ex-data e) (ex-cause e)))))))
+
+#?(:clj
+   (defonce ^{:private true
+              :doc "The options the last defn-typed.core/instrument! got, nil before the first: what a
+      redefinition re-instruments its function with (keep-instrumented!)."}
+     instrument-options
+     (atom nil)))
+
+#?(:clj
+   (defn- with-default-report
+     "options with report-invalid-call! as `:report` unless they carry one."
+     [options]
+     (update options :report #(or % report-invalid-call!))))
+
+#?(:clj
+   (defn instrument!
+     "malli.instrument/instrument! with options (malli's: `:filters`, `:report`, `:scope`, `:gen`,
+      `:data`), report-invalid-call! as the default `:report` (a rejection reads `defn-typed: <fn> —
+      invalid :<key>: expected <schema>, got <value>`; an options `:report` wins), and the options
+      kept for re-instrumenting a redefined function (keep-instrumented!). Returns what malli's
+      instrument! returns. With `:dev` off: a no-op returning nil."
+     ([] (instrument! nil))
+     ([options]
+      (when (setting :dev)
+        (reset! instrument-options options)
+        ((requiring-resolve 'malli.instrument/instrument!) (with-default-report options))))))
+
+#?(:clj
+   (defn- instrument-options-for
+     "The options keep-instrumented! re-instruments the function f (a qualified symbol) with: the last
+      defn-typed.core/instrument!'s, without `:data`, filtered to f alone; `{:filters [f]}` when the
+      instrumentation came from malli's own instrument!."
+     [f]
+     (let [only-f [(fn [n s _] (= f (symbol (str n) (str s))))]]
+       (if-let [options @instrument-options]
+         (-> options (dissoc :data) (assoc :filters only-f) with-default-report)
+         {:filters only-f}))))
 
 #?(:clj
    (defn assert-cases
