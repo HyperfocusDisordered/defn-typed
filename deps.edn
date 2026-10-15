@@ -1,4 +1,5 @@
 {:paths ["src" "resources"]
+ ;; oldest malli every suite passes on: 0.16.3 (README "malli versions")
  :deps {metosin/malli {:mvn/version "0.20.1"}}
  :aliases {;; clj tests: clojure -M:test (-Ddefn-typed.dev=true: the dev behaviour under test, as a
            ;; project's dev/test alias sets it)

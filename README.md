@@ -807,13 +807,11 @@ Its call sites need no change: a literal-map call is a map call.
 
 ## malli versions
 
-`deps.edn` declares **0.20.1**.
-Tested on 0.11.0 and 0.20.1; the oldest release both test suites pass on is **0.11.0**:
-
-- clj: needs 0.9.0 (changelog: "`::m/extra-key` error retains the error value"; the suite fails
-  on 0.8.9);
-- cljs: needs 0.11.0 (changelog: "Replace `goog/mixin` with `Object.assign`"; on 0.10.4 current
-  ClojureScript instrumentation fails with `goog.mixin is not a function`).
+`deps.edn` declares **0.20.1**. The oldest release every test suite passes on is **0.16.3**
+(`clojure -M:test` with the switch on and off, the cljs `test` and `inline` builds). On 0.16.0 to
+0.16.2 instrumenting a function again stacks a second wrapper (one clj failure); on 0.13.0 the clj
+suite has 9 failures (a reload drops the instrumentation; the invalid-schema, literal-check and
+clj-kondo type tests fail too). The cljs suite passes on both.
 
 A project that declares its own malli gets that version (tools.deps picks the top-level one).
 
