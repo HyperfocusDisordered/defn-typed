@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- `:dev` setting (`-Ddefn-typed.dev=true`), the Clojure analogue of `goog.DEBUG`, off by default:
+  a release JVM loading a namespace only defines the functions — no in/out cases, no `defmeta`
+  registrations, no unknown-key check on real-map calls, no instrumentation upkeep, no
+  `:stale-callers` signatures or watches, no Typed Clojure check. Dev/test/REPL aliases add
+  `-Ddefn-typed.dev=true`. ClojureScript's unknown-key check moves under `goog.DEBUG` (a release
+  build has none).
+- `:stale-callers` defaults to `:warn` (names the stale callers); `:reload`, which reloads the
+  callers' namespaces from disk, is opt-in.
+- A private defn-typed function (`^:private`, or `:private true` in its `defmeta`) is instrumented
+  in dev like a public one; its `<name>--positional`, `<name>-props` (and `:malli-in-prod` vars)
+  are private too.
+- A map-literal call compiled before its callee's definition (the callee `declare`d above it)
+  compiles as a map call and is reported by the definition under `:literal-check`:
+  `defn-typed: <file>:<line> calls <fn> before its definition — …` (`:error` fails, `:off` silent).
+- `defn-typed.core/instrument!` (malli's `instrument!` options): a rejection's message reads
+  `defn-typed: <fn> — invalid :<key>: expected <schema>, got <value>` (malli's ex-data unchanged;
+  a `:report` of yours wins), and a redefinition re-instruments with the same options. A no-op with
+  `:dev` off.
+- Every ex-info the library throws carries `:type`, one of `:defn-typed.core/invalid-form`,
+  `invalid-schema`, `invalid-cases`, `setting`, `literal-call`, `forward-call`, `unknown-keys`,
+  `inout-failure`, `typed-check`.
+- A leading `{:pre … :post …}` holds wherever the body lands (also a body that `recur`s to the
+  function, or a table of more than 20 rows); `:post` beside such a `recur` is a compile error, as
+  in `fn`.
+- clj-kondo hook: the linted `defn` carries the `defmeta`'s `:doc` (clojure-lsp hover), and a row
+  the body never reads is reported as an unused binding.
+- README: every setting (default, scope, when read, property, per-function key), `defnt`, the
+  `:dev` flag, an "Escape hatch" section, an "Errors" section.
+- Breaking (since 0.3.1): metadata on the input map (`^{:as row}`, `^{:closed true}`) is a compile
+  error; data the body needs whole is a row (`{:row :map}`).
 - cljs dev builds check map-literal calls too: a `shadow-cljs watch` prints `WARNING defn-typed <file>:<line>: …` for a wrong literal call (`:refer`red, qualified, aliased or inside the defining namespace) and the call stays the map call; release builds are unchanged. `{:literal-check :off}` keeps a dev build without the call-site macro.
 - The first build of a fresh shadow-cljs JVM recompiles every namespace that holds a defn-typed function or requires one (its cached analysis names the call-site macro); builds in a running `watch` compile only what changed.
 - In/out cases that call a function declared above and defined further down keep waiting for it when shadow-cljs recompiles a namespace over its earlier analysis.
