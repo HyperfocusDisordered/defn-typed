@@ -1254,6 +1254,16 @@
        v)))
 
 #?(:clj
+   (defn collect-private!
+     "Called by a clj defn-typed definition of a private function, `:dev` on, right after its defn:
+      registers v's function schema with malli (malli.instrument/-collect!, what collect! does for one
+      var), since collect! reads only a namespace's public vars; a later instrument! then wraps v
+      like a public function. Loads malli.instrument when nothing has yet (a dev JVM only). Returns v."
+     [v]
+     ((requiring-resolve 'malli.instrument/-collect!) v)
+     v))
+
+#?(:clj
    (def ^:dynamic *typed-checking*
      "True on the thread that type-checks a definition (typed-check!): the checker expands the
       defn-typed form again, and that expansion queues no check of its own."
@@ -1649,6 +1659,10 @@
                                in-schema)
               props (symbol (str fn-name "-props"))
               positional (symbol (str fn-name "--positional"))
+              ;; a private function (^:private on its name, or :private in its defmeta): the vars it
+              ;; expands to are private too
+              private? (boolean (or (:private (meta fn-name)) (:private (get @pending-meta (qualified &env fn-name)))))
+              def-name #(cond-> % private? (vary-meta assoc :private true))
               cljs? (boolean (:ns &env))
               q (qualified &env fn-name)
               q-props (qualified &env props)
@@ -1741,7 +1755,7 @@
           (when (and cljs? (or (inline-on? true) (not= :off (or (:literal-check spec) (setting :literal-check)))))
             (install-cljs-expander! &env fn-name spec))
           (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
-                body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))
+                body-defn (when positional? `(defn ~(def-name positional) {:no-doc true} ~locals ~@body))
                 ;; clj: after the defn, callers compiled against another signature are stale (cljs:
                 ;; shadow-cljs recompiles the namespaces that depend on a changed one)
                 ;; clj: the schema vars the rows refer to — their values are part of the signature,
@@ -1760,6 +1774,8 @@
                 ;; malli.dev.cljs/start! in the hot-reload after-load hook)
                 instrumented-before-call (when dev-clj? [(plumbing `(instrumented-before! '~q))])
                 keep-instrumented-call (when dev-clj? [(plumbing `(keep-instrumented! (var ~fn-name)))])
+                ;; clj dev: malli's collect! reads public vars only, so a private function registers itself
+                collect-private-call (when (and dev-clj? private?) [(plumbing `(collect-private! (var ~fn-name)))])
                 ;; clj: a row or the output holding a symbol or a call is judged once evaluated, right
                 ;; after the defn, before malli registers the function's schema
                 schema-check-call (when (and dev-clj? (seq loaded-items))
@@ -1777,7 +1793,7 @@
                                    (conj (plumbing `(watch-schemas! (var ~fn-name) [~@(map (fn [v] `(var ~(symbol v))) deps)])))))]
             (if-not malli-opts
               `(do
-                 ~(plumbing `(def ~props ~props-form))
+                 ~(plumbing `(def ~(def-name props) ~props-form))
                  ;; the body calls name before its defn: a recursive call, name passed as a value
                  ~@(when positional? [`(declare ~fn-name) body-defn])
                  ~@instrumented-before-call
@@ -1787,6 +1803,7 @@
                              ~call)
                     positional? plumbing)
                  ~@schema-check-call
+                 ~@collect-private-call
                  ~@keep-instrumented-call
                  ~@inout-call
                  ~@signature-call
@@ -1799,11 +1816,11 @@
                     check? (gensym "check")
                     result (gensym "result")]
                 `(do
-                   ~(plumbing `(def ~props ~props-form))
-                   ~(plumbing `(def ~(with-meta slot {:no-doc true})
+                   ~(plumbing `(def ~(def-name props) ~props-form))
+                   ~(plumbing `(def ~(vary-meta (def-name slot) assoc :no-doc true)
                                  (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts})))
                    (declare ~fn-name)
-                   ~(or body-defn `(defn ~body-fn {:no-doc true} [~m] ~call))
+                   ~(or body-defn `(defn ~(def-name body-fn) {:no-doc true} [~m] ~call))
                    ~@instrumented-before-call
                    ~(plumbing
                      `(defn ~fn-name ~attrs [~m]
@@ -1815,6 +1832,7 @@
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
                    ~@schema-check-call
+                   ~@collect-private-call
                    ~@keep-instrumented-call
                    ~@inout-call
                    ~@signature-call
