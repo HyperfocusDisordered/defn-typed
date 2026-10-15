@@ -474,7 +474,8 @@ key beyond the rows, a key that is not a keyword literal (`{k 1}`) or without a 
 literal that fails the checks below, `apply` and
 higher-order uses, and every call of a function with a row read at call time, or
 whose body `recur`s to the function (its `recur` takes the map). A literal call compiled before
-the function's definition (the name declared above it, by `declare` or by its `defmeta`) is a map call too, and the definition
+the function's definition (the name declared above it, by `declare` or by its `defmeta`; in
+ClojureScript, a call above the definition in its file) is a map call too, and the definition
 reports it under `:literal-check`:
 
 ```
