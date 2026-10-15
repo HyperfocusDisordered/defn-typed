@@ -6,7 +6,6 @@
 - The first build of a fresh shadow-cljs JVM recompiles every namespace that holds a defn-typed function or requires one (its cached analysis names the call-site macro); builds in a running `watch` compile only what changed.
 - In/out cases that call a function declared above and defined further down keep waiting for it when shadow-cljs recompiles a namespace over its earlier analysis.
 - In/out cases for the library's pure public functions, written from outside with `defmeta` (`test/defn_typed/api_cases.cljc`, `test-typed/defn_typed/typed_api_cases.clj`).
-- Already on `main`: `:report-success` in `defn-typed.edn`, type variables in `defn-typed` signatures (`t/All`), `[:tuple …]` typed as `t/HVec`.
 
 ## 0.3.1 (2026-09-26)
 
