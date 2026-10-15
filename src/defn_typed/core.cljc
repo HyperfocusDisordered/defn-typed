@@ -1533,13 +1533,19 @@
 
 #?(:clj
    (defn- pending-vars
-     "cljs: the vars of the namespace being compiled that are declared but not defined yet (their
-      analyzed def is `:declared`), as `(var …)` forms; clj: none."
+     "cljs: the vars of the namespace being compiled that are declared but not defined yet, as
+      `(var …)` forms: a def analyzed as `:declared`, and any function of the namespace's analysis
+      that this file's compile has not reached (`cljs.analyzer/*file-defs*`). The second kind exists
+      when shadow-cljs recompiles a namespace with the analysis of its previous compile still in
+      place (the cache of a namespace holding a call-site expander is restored, then dropped), where
+      a `declare` of an already analyzed var changes nothing. clj: none."
      [env]
      (when (:ns env)
        (let [ns-sym (-> env :ns :name)
-             defs (get-in (some-> (resolve 'cljs.env/*compiler*) deref deref) [:cljs.analyzer/namespaces ns-sym :defs])]
-         (vec (for [[sym {:keys [declared]}] (sort-by key defs) :when declared]
+             defs (get-in (some-> (resolve 'cljs.env/*compiler*) deref deref) [:cljs.analyzer/namespaces ns-sym :defs])
+             reached (some-> (resolve 'cljs.analyzer/*file-defs*) deref deref)]
+         (vec (for [[sym {:keys [declared fn-var macro]}] (sort-by key defs)
+                    :when (or declared (and reached fn-var (not macro) (not (contains? reached sym))))]
                 `(var ~(symbol (str ns-sym) (str sym)))))))))
 
 #?(:clj

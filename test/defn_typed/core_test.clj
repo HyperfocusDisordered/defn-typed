@@ -523,6 +523,24 @@
           (is (some? (find-ns 'n4.release-off)))
           (finally (System/clearProperty "defn-typed.literal-check")))))))
 
+(deftest cljs-pending-vars
+  (testing "the vars an in/out case may call before they exist: the declared ones, and — when shadow-cljs recompiles a namespace over the analysis of its earlier compile, where a declare changed nothing — the functions this file's compile has not reached yet"
+    (with-cljs-compiler :none ['p.ns]
+      (fn [compiler]
+        (swap! compiler assoc-in [:cljs.analyzer/namespaces 'p.ns :defs]
+               {'declared {:declared true}
+                'early {:fn-var true}
+                'later {:fn-var true}
+                'a-macro {:fn-var true :macro true}
+                'a-value {}})
+        (intern (create-ns 'cljs.analyzer) '*file-defs* (atom #{'early}))
+        (try
+          (is (= '[(var p.ns/declared) (var p.ns/later)]
+                 (@#'core/pending-vars {:ns {:name 'p.ns}})))
+          (finally (remove-ns 'cljs.analyzer))))))
+  (testing "clj: none"
+    (is (nil? (@#'core/pending-vars nil)))))
+
 (deftest typed-check-without-typed-clojure
   (testing "Typed Clojure not on the classpath (this suite): a definition whose body contradicts its output schema prints nothing, emits no check, never loads the bridge"
     (let [err (java.io.StringWriter.)]
