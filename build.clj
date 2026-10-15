@@ -14,7 +14,7 @@
 (def url "https://github.com/HyperfocusDisordered/defn-typed")
 
 (defn- pom-data []
-  [[:description "A function's input/output contract and its examples, written next to the function."]
+  [[:description "Typed defn for Clojure and ClojureScript: one signature gives Typed Clojure static checks, compile-time literal-call checks, clj-kondo editor types, malli runtime contracts and example tests — and a call costs a positional call."]
    [:url url]
    [:licenses
     [:license
