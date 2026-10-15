@@ -64,7 +64,7 @@ then the typed function: plain data, in that order, nothing else.
 
 Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
 range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
-after `(malli.dev/start!)`, in tests after `(malli.instrument/instrument!)`. Without instrumentation
+after `(malli.dev/start!)`, in tests after `(defn-typed.core/instrument!)`. Without instrumentation
 nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
 functions in, see malli in production). Literal calls such
 as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
@@ -166,8 +166,8 @@ What is checked where:
   - another typed function's output: `(order-total {:price (label {:n 1})})`, `label` being `-> :string`.
 - **Runtime** (malli instrumentation, dev/test only, see
   [Checks run in dev/test only](#checks-run-in-devtest-only)): the actual values, ranges
-  (`{:price 0}` against `[:int {:min 1}]`) and the output. Unknown keys: literal calls flag them,
-  real maps are checked by malli as open maps. clj-kondo's types carry no ranges and read every
+  (`{:price 0}` against `[:int {:min 1}]`) and the output. Unknown keys: literal calls flag them
+  at compile time, real maps in dev builds (`:unknown-keys`); malli checks maps as open maps. clj-kondo's types carry no ranges and read every
   map as open.
 - **Compile** (the macro, at every map-literal call; cljs: every build, see
   [Compile-time literal checks](#compile-time-literal-checks)): unknown keys, missing keys, and values that are data against their row schema, ranges included.
@@ -183,7 +183,8 @@ Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent 
 the signatures already declare: no annotation per function. It follows a value where clj-kondo
 stops (a map built apart from the call) and checks the body against `->`.
 
-The library does not depend on Typed Clojure. Add it to your dev alias:
+The library does not depend on Typed Clojure. Add it to your dev alias (with `:dev` on, every
+definition is then checked as it loads, see `:typed-check` in [Configuration](#configuration)):
 
 ```clojure
 :aliases {:dev {:extra-deps {org.typedclojure/typed.clj.checker {:mvn/version "1.3.0"}
@@ -316,6 +317,7 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
 
 - `defmeta` goes before the `defn-typed` of the same name: the macro reads it to put `:doc` on
   the function. `defmeta` declares `name`.
+- `defnt` is `defn-typed` under a short name: `(defnt name {…} -> out body…)` expands the same.
 - **Input** = one map literal `{key schema …}`. Keys are keywords; qualified keys bind by their
   name (`:x/b` → `b`).
 - **Defaults** = `:default` in the type's own props, `:qty [:int {:min 1 :default 1}]`; that row
@@ -346,6 +348,10 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
   same line as its message.
 - A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
   a compile error naming the function. Single arity only.
+- A condition map `{:pre […] :post […]}` first in the body works as in `fn`, wherever the body
+  lands (`<name>--positional`, or the function itself when its body `recur`s to it or it has more
+  than 20 rows). As in `fn`, `:post` beside a `recur` to the function is a compile error (`Can only
+  recur from tail position`).
 - A row or output schema malli cannot build is a compile error naming the function, the row,
   malli's error and the file:line; a schema held in a var is judged as the definition loads. clj
   judges once malli is loaded (a dev/test/REPL loader, the Typed Clojure bridge), cljs builds
@@ -433,7 +439,13 @@ gets its default. Every other call is the map call: a map that is not a literal,
 key beyond the rows, a key that is not a keyword literal (`{k 1}`) or without a required key, a
 literal that fails the checks below, `apply` and
 higher-order uses, and every call of a function with a row read at call time, or
-whose body `recur`s to the function (its `recur` takes the map).
+whose body `recur`s to the function (its `recur` takes the map). A literal call compiled before
+the function's definition (the name `declare`d above it) is a map call too, and the definition
+reports it under `:literal-check`:
+
+```
+defn-typed: src/shop/db.clj:812 calls shop.db/lot-vertical before its definition — the call compiles as a map, not positionally; move the definition above the call
+```
 
 The switch:
 
@@ -456,9 +468,16 @@ The switch:
 
 A rewritten call skips `<name>`, so instrumentation does not see it: dev, REPL and test builds keep
 the switch off, where every call goes through the var. With it on, a caller compiled earlier still
-reaches a REPL redefinition of the body (it calls the `<name>--positional` var); a redefinition that
-changes the rows leaves it calling the new `<name>--positional` with the old row order (so does a
-caller compiled against an older version of the function).
+reaches a REPL redefinition of the body (it calls the `<name>--positional` var). A redefinition that
+changes the rows makes those callers stale: they call the new `<name>--positional` with the old row
+order. With `:dev` on, the redefinition prints the namespaces to reload (`:stale-callers :warn`,
+the default):
+
+```
+defn-typed: shop.price/order-total changed its signature; callers compiled with the old one: shop.cart — reload them
+```
+
+`:stale-callers :reload` reloads them itself (see [Configuration](#configuration)).
 
 A 3-row function with 2 defaults, `(total {:price p :qty 3})`, criterium `quick-bench` on JVM 21:
 positional `defn` 36 ns, switch off 51 ns, switch on 28 ns (0.1.4, which filled the defaults by
@@ -500,18 +519,64 @@ shadow-cljs run in `miniapp/`, and a nearer file overrides it. It is read once p
 first macroexpansion; no file = the defaults.
 
 ```clojure
-{:literal-check  :warn   ; :warn (default) | :error
+{:dev            false   ; false (default) | true
+ :literal-check  :warn   ; :warn (default) | :error | :off
+ :unknown-keys   :warn   ; :warn (default) | :error | :off
  :inline         true    ; true (default) | false
+ :stale-callers  :warn   ; :warn (default) | :reload | :off
+ :typed-check    :warn   ; :warn (default) | :error | :off
+ :inout-check    :warn   ; :warn (default) | :error | :off
  :report-success false}  ; false (default) | true
 ```
 
+| Setting | Default | Where it applies | Read when | Per function (`defmeta`) |
+|---|---|---|---|---|
+| `:dev` | `false` | Clojure (ClojureScript: `goog.DEBUG`) | each definition's expansion | — |
+| `:literal-check` | `:warn` | Clojure, ClojureScript | each call site's compile | yes, for its call sites |
+| `:unknown-keys` | `:warn` | dev builds (`:dev` / `goog.DEBUG`) | the definition's expansion (baked into the function) | yes |
+| `:inline` | `true` | Clojure (ClojureScript: release builds) | each call site's compile | — |
+| `:stale-callers` | `:warn` | Clojure, `:dev` on | at a redefinition (run time) | — |
+| `:typed-check` | `:warn` | Clojure, `:dev` on, Typed Clojure on the classpath | the definition's load | yes |
+| `:inout-check` | `:warn` | dev builds | the definition's expansion | yes |
+| `:report-success` | `false` | Clojure, `:dev` on | each file load (run time) | — |
+
+The four per-function settings go into the function's `defmeta` (`{:inout-check :off …}`) and
+win over the project's.
+
+- `:dev`: the Clojure analogue of `goog.DEBUG`, one switch for everything a definition does at
+  load besides defining the function. Dev, test and REPL JVMs set it with
+  `-Ddefn-typed.dev=true` (see the aliases below); production leaves it unset.
+
+  What a release JVM (`:dev false`) does when it loads a namespace: nothing beyond defining the
+  functions. It runs no in/out cases, registers no `defmeta` cases, emits no unknown-key check on
+  real-map calls, keeps no instrumentation upkeep, puts no `:stale-callers` watch and records no
+  signature, and runs no Typed Clojure check. Compile-time work stays: literal calls are checked
+  (`:literal-check`) and rewritten to positional calls (`:inline`) in every build.
+  ClojureScript has no `:dev` setting: `goog.DEBUG` is its signal, so a release build drops the same
+  things and a dev build keeps them.
 - `:literal-check`: a literal call that fails its compile-time check (see Compile-time literal
   checks) prints its `WARNING defn-typed …` line and compiles to the map call (`:warn`), or is a
   compile error with the same text (`:error`): the namespace does not load, the build fails.
   Clojure and ClojureScript alike; `:off` in a ClojureScript dev build also skips the call-site
   macro (see Zero-cost calls).
+  `:off` checks nothing.
+- `:unknown-keys`: a real map (not a literal) holding keys beyond the rows, in a dev build. `:warn`
+  prints `defn-typed: <ns/fn> unknown key :k — the keys are :a :b` once per function and set of
+  unknown keys (up to 1000 such pairs per process, then one muted line); `:error` throws; `:off`
+  emits no check. A release build has no check.
 - `:inline`: whether a fitting literal call compiles to the positional call in Clojure (see
   Zero-cost calls). ClojureScript decides by the build: on in release, off in dev.
+- `:stale-callers` (Clojure, `:dev` on): what a redefinition does to the namespaces whose literal
+  calls compiled against the old signature (a changed row order, or a changed schema var a row
+  refers to). `:warn` (default) prints one line naming them; `:reload` (opt-in) reloads each
+  caller's namespace from disk: top-level effects re-run, REPL-only edits in it are lost; `:off`
+  does nothing.
+- `:typed-check` (Clojure, `:dev` on): with Typed Clojure on the classpath, each definition is
+  type-checked as it loads (see Typed Clojure): `:warn` prints each finding, `:error` fails the
+  load, `:off` checks nothing. A check runs up to 2 s per definition; the first one loads the
+  checker (seconds).
+- `:inout-check` (dev builds): the `defmeta` cases run as the definition loads: `:warn` prints one
+  line per failing case, `:error` fails the load, `:off` runs nothing.
 - `:report-success`: after a file loads (`require`, `load-file`, an editor's load-file), one line
   per namespace whose defn-typed checks all passed (schemas, in/out cases, Typed Clojure), on the
   stream the `WARNING` lines use:
@@ -528,10 +593,13 @@ first macroexpansion; no file = the defaults.
   REPL, outside a file load, gets none; a load stopped by an error outside defn-typed (a syntax
   error further down) still reports the definitions before it.
 
-A JVM system property wins over the file, the file over the default:
-`-Ddefn-typed.literal-check=warn|error`, `-Ddefn-typed.inline=false` (any other value is on),
-`-Ddefn-typed.report-success=true` (any other value is off). An
-unknown key, or a value outside its list, is an error naming the key and the allowed values.
+A JVM system property `-Ddefn-typed.<key>` wins over the file, the file over the default:
+`-Ddefn-typed.dev=true` and `-Ddefn-typed.report-success=true` (any other value is off),
+`-Ddefn-typed.inline=false` (any other value is on), `-Ddefn-typed.literal-check`,
+`-Ddefn-typed.unknown-keys`, `-Ddefn-typed.typed-check` and `-Ddefn-typed.inout-check` `=warn|error|off`,
+`-Ddefn-typed.stale-callers=warn|reload|off`. ClojureScript reads the same file and properties in
+the compiler's JVM. An unknown key, or a value outside its list, is an error naming the key and
+the allowed values.
 
 Strict mode, a literal that fails the check does not compile:
 
@@ -545,20 +613,34 @@ Syntax error (ExceptionInfo) compiling order-total at (shop.clj:12:3).
 defn-typed shop.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
 
-Dev and test keep the map call, so instrumentation checks every call; their aliases set the
-property (the file is shared with production builds):
+Dev and test turn the dev behaviour on and keep the map call, so instrumentation checks every
+call; their aliases set the properties (the file is shared with production builds):
 
 ```clojure
-:aliases {:test  {:jvm-opts ["-Ddefn-typed.inline=false"] …}
-          :nrepl {:jvm-opts ["-Ddefn-typed.inline=false"] …}}
+:aliases {:test  {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"] …}
+          :nrepl {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"] …}}
 ```
 
 ## Checks run in dev/test only
 
-- **Clojure**: a loader namespace on the test/REPL classpath only (never on the server's) requires
-  the app and runs `(malli.instrument/collect! {:ns …})` + `(malli.instrument/instrument!)`. A bad
-  call then throws `:malli.core/invalid-input` / `:malli.core/invalid-output`. A plain
-  `(require 'ns :reload)` redefines the vars un-instrumented; re-collect + instrument after it.
+- **Clojure**: a loader namespace on the test/REPL classpath only (never on the server's), in a
+  JVM with `-Ddefn-typed.dev=true`, requires the app and runs `(malli.instrument/collect! {:ns …})`
+  + `(defn-typed.core/instrument!)`. A bad call then throws `:malli.core/invalid-input` /
+  `:malli.core/invalid-output` (ex-data as malli builds it) with a message naming the function,
+  the key, the expected schema and the value:
+
+  ```
+  defn-typed: shop.price/order-total — invalid :qty: expected [:int {:min 1}], got 0
+  ```
+
+  `defn-typed.core/instrument!` takes malli's `instrument!` options (`:filters`, `:report`,
+  `:scope`, `:gen`); a `:report` of yours wins over that message. A definition loaded again is
+  re-instrumented with the same options. `(malli.instrument/instrument!)` works too, with malli's
+  message (`:malli.core/invalid-input`) and malli's default options after a redefinition. With
+  `:dev` off, `defn-typed.core/instrument!` does nothing and returns nil.
+  A private function is instrumented too: malli's `collect!` reads public vars only, so in dev a
+  private definition registers its own schema. A plain `(require 'ns :reload)` keeps the
+  instrumentation of every defn-typed function it redefines.
 - **ClojureScript**: the app calls `malli.dev.cljs/start!` under a dev define; the release build
   aliases it away (`:build-options {:ns-aliases {malli.dev.cljs malli.dev.cljs-noop}}`).
   `defmeta`'s registrations (cases, `:meta`, `#'f`) sit under `goog.DEBUG`, so a release build
@@ -566,6 +648,25 @@ property (the file is shared with production builds):
   `defn-typed.malli-in-prod`.
 - `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword in the attr-map):
   nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
+
+## Errors
+
+Every exception defn-typed throws is an `ex-info` whose `(:type (ex-data e))` is one of:
+
+| `:type` | thrown when |
+|---|---|
+| `:defn-typed.core/invalid-form` | a `defn-typed` / `defmeta` form is malformed (no name, a docstring, an argument vector, no `->`, metadata on the input map, …) |
+| `:defn-typed.core/invalid-schema` | a row or output schema malli cannot build |
+| `:defn-typed.core/invalid-cases` | `:inout-tests` (or legacy `tests`) is not a vector of pairs |
+| `:defn-typed.core/setting` | `defn-typed.edn` or a `defn-typed.*` system property holds an unknown key or a value outside its list |
+| `:defn-typed.core/literal-call` | a map-literal call fails its compile-time check under `:literal-check :error` |
+| `:defn-typed.core/forward-call` | a map-literal call compiled before its callee's definition, under `:literal-check :error` |
+| `:defn-typed.core/unknown-keys` | a real map holds keys beyond the rows, under `:unknown-keys :error` |
+| `:defn-typed.core/inout-failure` | an in/out case fails as the definition loads, under `:inout-check :error` |
+| `:defn-typed.core/typed-check` | Typed Clojure reports a finding as the definition loads, under `:typed-check :error` |
+
+A rejection by malli's instrumentation keeps malli's ex-data (`:malli.core/invalid-input`,
+`:malli.core/invalid-output`); `defn-typed.core/instrument!` only rewrites its message.
 
 ## malli in production
 
@@ -638,7 +739,9 @@ The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/de
 further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
 arrow and the body as the `def` and the two `defn`s above, with the row keys as locals, so a direct
 `name--positional` call resolves and its arity is checked, and reports the same shape errors as the
-macro; the `defmeta` hook lints the map as code. The exported config keeps clojure-lsp from
+macro; a row the body never reads is clj-kondo's `unused binding` at its key; the `defn` it lints
+carries the `:doc` of the `defmeta` above, so clojure-lsp's hover shows it. The `defmeta` hook
+lints the map as code. The exported config keeps clojure-lsp from
 reporting `name-props` and `name--positional` as unused public vars (checked with clojure-lsp
 2026.07.06).
 
@@ -652,6 +755,33 @@ reporting `name-props` and `name--positional` as unused public vars (checked wit
   name keeps two namespaces' functions of one name as two tests.
 - A function with several positional arguments registers its examples with
   `(tests #'f [[[args…] out] …])`; `defmeta` pairs take one argument.
+
+## Escape hatch
+
+A plain `defn` sits beside defn-typed functions: multi-arity, variadic or positional functions
+stay `defn`, with a hand-written schema and their cases still in `defmeta` above (cases of a
+one-argument function are `[in out]` pairs; several positional arguments register through `tests`):
+
+```clojure
+(defmeta clamp {:doc "n held between lo and hi."})
+
+(defn clamp
+  {:malli/schema [:=> [:cat :int :int :int] :int]}
+  [n lo hi]
+  (max lo (min hi n)))
+
+(defn-typed.core/tests #'clamp [[[5 0 3] 3] [[-1 0 3] 0]])
+```
+
+To move a function off the library, write the `defn` its expansion shows (see Syntax): delete the
+input table and `->`, keep the destructuring.
+
+```clojure
+(defn order-total [{:keys [price qty discount] :or {qty 1 discount 0}}]
+  (quot (* price qty (- 100 discount)) 100))
+```
+
+Its call sites need no change: a literal-map call is a map call.
 
 ## Compared with `malli.experimental/defn`
 

@@ -46,7 +46,8 @@
                                 defn-typed.order-same-ns]]
                  (require ns-sym :reload)))))
 
-(use-fixtures :each (fn [t] (reload-all-from-disk!) (t) (reload-all-from-disk!)))
+;; these tests judge :reload (opt-in; the default :warn is judged in stale-callers-test)
+(use-fixtures :each (fn [t] (reload-all-from-disk!) (with-stale-callers :reload t) (reload-all-from-disk!)))
 
 (defn- watch-keys
   "The keys of the watches on the var v that defn-typed installed."

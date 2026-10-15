@@ -46,6 +46,7 @@
     (let [[_ thrown] (load-fixture! :error)
           root (last (take-while some? (iterate ex-cause thrown)))]
       (is (some? thrown))
+      (is (= :defn-typed.core/typed-check (:type (ex-data root))))
       (is (re-find #"^defn-typed defn_typed/typed_check_fixture\.clj:\d+ output of shout: Type mismatch:" (str (ex-message root)))))))
 
 (deftest off-does-nothing
@@ -70,7 +71,7 @@
   (testing "a fresh JVM where nothing loaded malli before the definition expanded: typed-check! judges the schemas before malli registers them, the load fails with the expansion's one line, no «Typed Clojure check … failed»"
     (let [java (str (System/getProperty "java.home") "/bin/java")
           classpath (str (System/getProperty "java.class.path") java.io.File/pathSeparator "test")
-          process (.start (doto (ProcessBuilder. [java "-cp" classpath "clojure.main" "-e"
+          process (.start (doto (ProcessBuilder. [java "-Ddefn-typed.dev=true" "-cp" classpath "clojure.main" "-e"
                                                   (str "(require 'defn-typed.core)"
                                                        "(println :malli-loaded (some? (find-ns 'malli.core)))"
                                                        "(require 'defn-typed.schema-typo)")])
@@ -83,3 +84,13 @@
                                 " — :malli.core/invalid-schema {:schema :it} (test/defn_typed/schema_typo.clj:11)"))
           out)
       (is (not (str/includes? out "Typed Clojure check")) out))))
+
+(deftest dev-off-checks-nothing
+  (testing "-Ddefn-typed.dev=false (a release JVM with Typed Clojure on the classpath): the load runs no check, so shout's mismatch prints nothing"
+    (let [previous (System/getProperty "defn-typed.dev")]
+      (try
+        (System/setProperty "defn-typed.dev" "false")
+        (is (= ["" nil] (load-fixture! nil)))
+        (finally (if previous
+                   (System/setProperty "defn-typed.dev" previous)
+                   (System/clearProperty "defn-typed.dev")))))))

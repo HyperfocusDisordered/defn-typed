@@ -5,12 +5,19 @@
    it expands to:
    (def <name>-props [:map …]), (defn name [m] (let [{:keys [k…]} m] (<name>--positional k…))) and
    (defn <name>--positional [k…] body…), the row keys bound as locals, so the name, the schemas, the
-   body and a direct positional call lint like any defn; a table of more than 20 rows or a body
-   whose recur targets the function keeps the body in name, as the macro does. defmeta
+   body and a direct positional call lint like any defn; a row the body never reads is kondo's
+   unused binding at its key; the defn of name carries the :doc of the defmeta above it (hover); a
+   table of more than 20 rows or a body whose recur targets the function keeps the body in name, as
+   the macro does. defmeta
    (written above the function): rewrites (defmeta name {…}) into (do (declare name) {…}), as the
    macro declares it, so every symbol inside the map (the :inout-tests pairs included) is resolved
    like any other code."
   (:require [clj-kondo.hooks-api :as api]))
+
+(defonce ^{:doc "`{[<file> <ns> <fn name>] <docstring node>}`: the `:doc` of each defmeta linted, which
+   the defn-typed below it puts into its defn, so clojure-lsp's hover shows it."}
+  defmeta-docs
+  (atom {}))
 
 (defn- arg-vector?
   "Mirrors defn-typed.core/arg-vector?: a vector of binding forms (symbols, destructuring maps)
@@ -66,6 +73,26 @@
       (= 'letfn head) (boolean (some self-recur? (nnext children)))
       :else (boolean (some self-recur? children)))))
 
+(defn- with-conditions
+  "Mirrors defn-typed.core/with-conditions for a body that stays in name: a leading condition map
+   (a map followed by more body) becomes `(assert c)` per :pre before the body and, with :post,
+   `(let [% (do body…)] (assert c) … %)`, so `%` and the rows resolve as the macro runs them."
+  [body]
+  (let [[conditions & more] body
+        entries (when (and conditions (api/map-node? conditions) more)
+                  (into {} (map (fn [[k v]] [(api/sexpr k) v])) (partition 2 (:children conditions))))
+        asserts #(map (fn [c] (api/list-node [(api/token-node 'assert) c])) (:children %))]
+    (if entries
+      (concat (some-> (get entries :pre) asserts)
+              [(if-let [post (get entries :post)]
+                 (api/list-node (concat [(api/token-node 'let)
+                                         (api/vector-node [(api/token-node '%)
+                                                           (api/list-node (cons (api/token-node 'do) more))])]
+                                        (asserts post)
+                                        [(api/token-node '%)]))
+                 (api/list-node (cons (api/token-node 'do) more)))])
+      body)))
+
 (defn- name-node?
   "Whether node is a symbol token: the function's name."
   [node]
@@ -80,7 +107,7 @@
     (:children node) (assoc node :children (map #(with-any vars %) (:children node)))
     :else node))
 
-(defn- defn-typed-form [node]
+(defn- defn-typed-form [node {:keys [filename ns]}]
   (let [[written-name & more] (rest (:children node))
         fn-name (if (name-node? written-name) written-name (api/token-node 'defn-typed-unnamed))
         [doc more] (if (api/string-node? (first more)) [(first more) (rest more)] [nil more])
@@ -119,11 +146,15 @@
                             (mapcat #(when (api/vector-node? %) (:children %)) input)))
         props (api/token-node (symbol (str (api/sexpr fn-name) "-props")))
         m (api/token-node 'm__defn-typed)
-        ;; the row keys as locals, also bound once to `_` so a row the body does not read reports
-        ;; nothing (the macro binds every row, whether the body reads it or not)
+        ;; the row keys as locals, located at their keys: a row the body never reads is kondo's
+        ;; unused binding there
         locals (keep #(let [k (first (:children %))]
-                        (when (api/keyword-node? k) (api/token-node (symbol (name (api/sexpr k))))))
-                     row-nodes)]
+                        (when (api/keyword-node? k) (with-meta (api/token-node (symbol (name (api/sexpr k)))) (meta k))))
+                     row-nodes)
+        ;; the same locals, unlocated: where name only passes them on
+        unlocated (map #(api/token-node (api/sexpr %)) locals)
+        ;; the :doc of the defmeta above (clojure-lsp hover), unless the form wrongly holds one
+        hover-doc (or doc (get @defmeta-docs [filename ns (when (name-node? written-name) (api/sexpr written-name))]))]
     (when-not (name-node? written-name)
       (finding! written-name "the first argument must be the function's name"))
     (when type-vars
@@ -171,7 +202,7 @@
           defn-name (fn [call]
                       (form
                         (concat [(api/token-node 'defn) fn-name]
-                                (when doc [doc])
+                                (when hover-doc [hover-doc])
                                 [(api/map-node [(api/keyword-node :malli/schema)
                                                 (api/vector-node [(api/keyword-node :=>)
                                                                   (api/vector-node [(api/keyword-node :cat) props])
@@ -179,11 +210,13 @@
                                                                   (or out-schema (api/keyword-node :any))])
                                                 (api/keyword-node :arglists)
                                                 (api/list-node [(api/token-node 'quote)
-                                                                (api/list-node [(api/vector-node [(api/map-node [(api/keyword-node :keys) (api/vector-node locals)])])])])])
+                                                                (api/list-node [(api/vector-node [(api/map-node [(api/keyword-node :keys) (api/vector-node unlocated)])])])])])
                                  (api/vector-node [m])
                                  call])))
-          body-let #(api/list-node (concat [(api/token-node 'let) (api/vector-node %)] body))
-          rows-of-m [(api/map-node [(api/keyword-node :keys) (api/vector-node locals)]) m]]
+          ;; the rows name binds to pass on (unlocated: the positional parameters, located at the
+          ;; keys, are the ones the body reads), or to the body that stays in name (located; two
+          ;; keys binding one local, reported above, bind it once)
+          rows-of-m #(vector (api/map-node [(api/keyword-node :keys) (api/vector-node %)]) m)]
       {:node (form
                (concat
                  [(api/token-node 'do)
@@ -194,26 +227,35 @@
                  ;; without (declare name), which after the defmeta's is a redundant declare
                  (if positional?
                    [(form [(api/token-node 'declare) positional])
-                    (defn-name (api/list-node [(api/token-node 'let) (api/vector-node rows-of-m)
-                                               (api/list-node (cons positional locals))]))
-                    (form [(api/token-node 'defn) positional
-                           (api/map-node [(api/keyword-node :no-doc) (api/token-node true)])
-                           (api/vector-node locals)
-                           (body-let [(api/token-node '_) (api/vector-node locals)])])]
+                    (defn-name (api/list-node [(api/token-node 'let) (api/vector-node (rows-of-m unlocated))
+                                               (api/list-node (cons positional unlocated))]))
+                    ;; the body as a defn's: a leading condition map is the defn's own
+                    (form (concat [(api/token-node 'defn) positional
+                                   (api/map-node [(api/keyword-node :no-doc) (api/token-node true)])
+                                   (api/vector-node locals)]
+                                  body))]
                    ;; no positional fn (see positional?): the body stays in name
-                   [(defn-name (body-let (concat rows-of-m [(api/token-node '_) (api/vector-node locals)])))])))})))
+                   [(defn-name (api/list-node (concat [(api/token-node 'let) (api/vector-node (rows-of-m (map first (vals (group-by api/sexpr locals)))))]
+                                                      (with-conditions body))))])))})))
 
-(defn defn-typed [{:keys [node]}]
+(defn defn-typed [{:keys [node] :as hook}]
   (if (nil? (second (:children node)))
     ;; (defn-typed): nothing to rewrite, the call itself lints as it is
     (do (api/reg-finding! (assoc (meta node) :message "defn-typed: the first argument must be the function's name"
                                  :type :syntax))
         nil)
-    (defn-typed-form node)))
+    (defn-typed-form node hook)))
 
-(defn defmeta [{:keys [node]}]
+(defn defmeta [{:keys [node filename ns]}]
   (let [[fn-name m] (rest (:children node))
-        named? (name-node? fn-name)]
+        named? (name-node? fn-name)
+        doc (when (and named? m (api/map-node? m))
+              (some (fn [[k v]] (when (and (api/keyword-node? k) (= :doc (api/sexpr k)) (api/string-node? v)) v))
+                    (partition 2 (:children m))))]
+    (when named?
+      (swap! defmeta-docs #(if doc
+                             (assoc % [filename ns (api/sexpr fn-name)] doc)
+                             (dissoc % [filename ns (api/sexpr fn-name)]))))
     (when-not named?
       (api/reg-finding! (assoc (meta (or fn-name node))
                                :message "defmeta: the first argument must be the function's name"

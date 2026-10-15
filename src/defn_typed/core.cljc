@@ -19,12 +19,13 @@
    (instrumented-before! 'f) before that defn and (keep-instrumented! #'f) after it, so a var malli
    instrumented stays instrumented when redefined, (signature! #'f \"…\") and, for rows typed by a
    schema var (`:order Order`), (watch-schemas! #'f [#'Order]); every call site goes through
-   expand-call, a redefinition with another signature reloads the namespaces whose calls compiled
-   to the old positional call, and a changed schema var reloads the function's namespace
-   (`:stale-callers` in defn-typed.edn). A definition whose defmeta holds cases runs them as it
-   loads (inout-check!, `:inout-check` in defn-typed.edn; cljs dev builds only). With Typed Clojure
-   on the classpath a clj definition then calls (typed-check! #'f …), which type-checks it
-   (`:typed-check` in defn-typed.edn).
+   expand-call, a redefinition with another signature names the namespaces whose calls compiled
+   to the old positional call, and a changed schema var names the function (`:stale-callers` in
+   defn-typed.edn: `:warn` by default, `:reload` reloads them from disk). A definition whose defmeta holds cases runs them as it
+   loads (inout-check!, `:inout-check` in defn-typed.edn). With Typed Clojure on the classpath a
+   clj definition then calls (typed-check! #'f …), which type-checks it (`:typed-check` in
+   defn-typed.edn). Everything a definition does at load besides defining the function exists in
+   dev builds only: clj with `:dev` on (`-Ddefn-typed.dev=true`), cljs under goog.DEBUG.
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    `defnt` = defn-typed under a short name.
@@ -37,6 +38,7 @@
      and CI see them;
    - `test-var!` (clj) runs a var's `:test` fn and its cases under one clojure.test report."
   #?(:clj (:require [clojure.edn]
+                   [clojure.java.io]
                    [clojure.string]
                    [clojure.test :as test]
                    [clojure.walk])
@@ -58,7 +60,7 @@
       #?(:clj (some-> (namespace sym) symbol load-failed!))
       (throw (ex-info (str "defn-typed: " sym " cases must be a vector of [[args…] expected] pairs, got "
                            (pr-str (first bad)))
-                      {:var sym :case (first bad)})))))
+                      {:type ::invalid-cases :var sym :case (first bad)})))))
 
 (defonce registry (atom {}))
 
@@ -87,7 +89,7 @@
       #?(:clj (some-> (namespace sym) symbol load-failed!))
       (throw (ex-info (str "defn-typed: " sym " defmeta cases must be a vector of [in expected] pairs, got "
                            (pr-str (first bad)))
-                      {:var sym :case (first bad)})))
+                      {:type ::invalid-cases :var sym :case (first bad)})))
     (mapv (fn [[in expected]] [[in] expected]) pairs)))
 
 (defn shown-in
@@ -151,14 +153,15 @@
    `:unknown-keys` setting (mode) says: `:warn` prints `defn-typed: <ns/fn> unknown key :k — the keys
    are :a :b` once per (fn, set of unknown keys) per process (clj stderr, cljs console.warn), up to
    unknown-keys-report-limit pairs, then one muted line and nothing more; the call proceeds.
-   `:error` throws an ex-info of that text with `{:fn :unknown-keys :keys}`, every time."
+   `:error` throws an ex-info of that text with `{:type ::unknown-keys :fn :unknown-keys :keys}`,
+   every time."
   [{fn-name :fn row-keys :keys :keys [mode unknown-keys]}]
   (let [text (str "defn-typed: " fn-name " unknown key" (when (next unknown-keys) "s") " "
                   (apply str (interpose " " (map pr-str unknown-keys)))
                   " — the keys are " (apply str (interpose " " (map pr-str row-keys))))]
     (if (= :error mode)
       (do #?(:clj (load-failed! (ns-name *ns*)))
-          (throw (ex-info text {:fn fn-name :unknown-keys unknown-keys :keys row-keys})))
+          (throw (ex-info text {:type ::unknown-keys :fn fn-name :unknown-keys unknown-keys :keys row-keys})))
       (let [pair [fn-name (set unknown-keys)]
             [before after] (swap-vals! unknown-keys-reported remember-report pair)
             line (cond
@@ -536,11 +539,12 @@
    (def ^:private setting-values
      "The settings of defn-typed.edn and their allowed values, the first one the default.
       `:literal-check`, `:unknown-keys`, `:typed-check` and `:inout-check` also take a per-function
-      value in `defmeta`."
-     {:literal-check [:warn :error :off]
+      value in `defmeta`. `:dev` = the clj analogue of goog.DEBUG (dev-on?)."
+     {:dev [false true]
+      :literal-check [:warn :error :off]
       :unknown-keys [:warn :error :off]
       :inline [true false]
-      :stale-callers [:reload :warn :off]
+      :stale-callers [:warn :reload :off]
       :typed-check [:warn :error :off]
       :inout-check [:warn :error :off]
       :report-success [false true]}))
@@ -565,8 +569,8 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn
-      :inout-check :warn :report-success false}`,
+      `{:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn
+      :typed-check :warn :inout-check :warn :report-success false}`,
       merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
       outside the key's allowed ones."
@@ -574,15 +578,15 @@
      (let [where (str "defn-typed " (some-> file .getPath) ": ")
            m (if file (clojure.edn/read-string (slurp file)) {})]
        (when-not (map? m)
-         (throw (ex-info (str where "the settings must be a map, got " (pr-str m)) {:file file})))
+         (throw (ex-info (str where "the settings must be a map, got " (pr-str m)) {:type ::setting :file file})))
        (doseq [[k v] m]
          (cond
            (not (contains? setting-values k))
            (throw (ex-info (str where "unknown key " (pr-str k) " — the keys are "
                                 (apply str (interpose ", " (keys setting-values))))
-                           {:file file :key k}))
+                           {:type ::setting :file file :key k}))
            (setting-value-problem k v)
-           (throw (ex-info (str where (setting-value-problem k v)) {:file file :key k}))
+           (throw (ex-info (str where (setting-value-problem k v)) {:type ::setting :file file :key k}))
            ;; a known key with an allowed value: merged below
            :else nil))
        (merge (into {} (map (fn [[k vs]] [k (first vs)])) setting-values) m))))
@@ -596,10 +600,10 @@
 #?(:clj
    (defn- setting
      "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
-      (`defn-typed.inline`: anything but `false` is on; `defn-typed.report-success`: `true` is on,
-      anything else off; `defn-typed.literal-check`,
+      (`defn-typed.inline`: anything but `false` is on; `defn-typed.dev` and
+      `defn-typed.report-success`: `true` is on, anything else off; `defn-typed.literal-check`,
       `defn-typed.unknown-keys`, `defn-typed.typed-check` and `defn-typed.inout-check`: `warn`, `error`
-      or `off`; `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's
+      or `off`; `defn-typed.stale-callers`: `warn`, `reload` or `off`), else the project's
       defn-typed.edn, else the default. A function's own `:literal-check` / `:unknown-keys` /
       `:typed-check` / `:inout-check` in its defmeta wins over it."
      [k]
@@ -607,12 +611,12 @@
        (cond
          (nil? property) (get @project-settings k)
          (= :inline k) (not= "false" property)
-         (= :report-success k) (= "true" property)
+         (#{:dev :report-success} k) (= "true" property)
          (some #{(keyword property)} (get setting-values k)) (keyword property)
          :else (throw (ex-info (str "defn-typed: the system property defn-typed." (name k)
                                     " must be one of " (apply str (interpose ", " (map name (get setting-values k))))
                                     ", got " (pr-str property))
-                               {:property (str "defn-typed." (name k))}))))))
+                               {:type ::setting :property (str "defn-typed." (name k))}))))))
 
 #?(:clj
    (defn- inline-on?
@@ -649,9 +653,10 @@
 #?(:clj
    (defn- record-inlined-caller!
      "Records *ns* as a caller of f (a qualified symbol) in inlined-callers when the positional call
-      compiles from a file: a call typed into a REPL (file `NO_SOURCE_PATH`) has no file to reload."
+      compiles from a file with `:dev` on: a call typed into a REPL (file `NO_SOURCE_PATH`) has no
+      file to reload, and a release JVM has no stale callers to act on."
      [f file]
-     (when (and file (not= "NO_SOURCE_PATH" file))
+     (when (and file (not= "NO_SOURCE_PATH" file) (setting :dev))
        (swap! inlined-callers update f (fnil conj #{}) (ns-name *ns*)))))
 
 #?(:clj
@@ -761,7 +766,8 @@
          (load-failed! (symbol (namespace f)))
          (throw (ex-info (str "defn-typed: " f " — invalid schema for " (if output "the output" (pr-str row)) ": "
                               hint cause " (" (project-path file) ":" line ")")
-                         (merge {:fn f :schema schema :malli/error error} (select-keys item [:row :output]))))))))
+                         (merge {:type ::invalid-schema :fn f :schema schema :malli/error error}
+                                (select-keys item [:row :output]))))))))
 
 #?(:clj
    (defn check-var-schemas!
@@ -1046,7 +1052,7 @@
                                (apply str (interpose "; " mismatches)))]
                  (when-not cljs? (load-failed! (ns-name *ns*)))
                  (if (= :error literal-check)
-                   (throw (ex-info text {::literal-mismatches (vec mismatches)}))
+                   (throw (ex-info text {:type ::literal-call ::literal-mismatches (vec mismatches)}))
                    (binding [*out* *err*]
                      (println (str "WARNING " text))))))
              (if (and inline? (not mismatches) (:positional spec)
@@ -1127,11 +1133,12 @@
       When an earlier definition of v had another signature, the namespaces holding a literal call
       compiled to its old positional call (inlined-callers) — other than v's own, which is the one
       loading, and one being loaded right now (it compiles against the new definition) — are stale,
-      and the `:stale-callers` setting says what happens: `:reload` reloads each from its file
-      (reload-namespace!; its literal calls are judged again, so an incompatible one shows its
-      warning) and prints `defn-typed: <f> changed its signature, reloaded callers: <ns>, …`;
-      `:warn` prints `defn-typed: <f> changed its signature; callers compiled with the old one:
-      <ns>, … — reload them`; `:off` does neither. Records v among the functions its namespace's
+      and the `:stale-callers` setting says what happens: `:warn` (the default) prints
+      `defn-typed: <f> changed its signature; callers compiled with the old one: <ns>, … — reload
+      them`; `:reload` (opt-in) reloads each from its file (reload-namespace!: top-level effects
+      re-run, REPL-only edits in it are lost; its literal calls are judged again, so an
+      incompatible one shows its warning) and prints `defn-typed: <f> changed its signature,
+      reloaded callers: <ns>, …`; `:off` does neither. Records v among the functions its namespace's
       load defines (update-load-report!). Returns v."
      [v signature]
      (let [f (symbol v)
@@ -1175,10 +1182,10 @@
    (defn- schema-changed!
      "What a changed schema var (schema-var, now another value) does to f (a qualified symbol)
       typed by it, per the `:stale-callers` setting: nothing while f's namespace is loading (that
-      load redefines f with the new value, e.g. a schema of f's own namespace); `:reload` reloads
-      f's namespace from its file (reload-namespace!), which redefines f, whose signature! then
-      acts on its callers; `:warn` prints `defn-typed: <schema var> changed; <f> and its callers use
-      the old one — reload them`; `:off` nothing."
+      load redefines f with the new value, e.g. a schema of f's own namespace); `:warn` (the
+      default) prints `defn-typed: <schema var> changed; <f> and its callers use the old one —
+      reload them`; `:reload` (opt-in) reloads f's namespace from its file (reload-namespace!),
+      which redefines f, whose signature! then acts on its callers; `:off` nothing."
      [f schema-var]
      (let [fn-ns (symbol (namespace f))]
        (when-not (loading? fn-ns)
@@ -1234,20 +1241,33 @@
      nil))
 
 #?(:clj
+   (declare instrument-options-for))
+
+#?(:clj
    (defn keep-instrumented!
      "Called by a clj defn-typed definition right after its defn, with its var v: when
       instrumented-before! recorded it, registers v's function schema with malli
-      (malli.instrument/-collect!, what collect! does for one var) and instruments v alone
-      (malli.instrument/instrument! with default options, so a reporter malli.dev/start! captured
-      on malli.core/-fail! still applies; instrumenting unwraps first, so one wrapper). malli is
-      resolved, never required: that var being instrumented means it is loaded. Returns v."
+      (malli.instrument/-collect!, what collect! does for one var) and instruments v alone with the
+      options the last defn-typed.core/instrument! got (instrument-options-for; malli's defaults
+      when the instrumentation came from malli's own instrument!, so a reporter malli.dev/start!
+      captured on malli.core/-fail! still applies; instrumenting unwraps first, so one wrapper).
+      malli is resolved, never required: that var being instrumented means it is loaded. Returns v."
      [v]
      (let [f (symbol v)]
        (when (contains? (first (swap-vals! instrumented-definitions disj f)) f)
          ((resolve 'malli.instrument/-collect!) v)
-         ((resolve 'malli.instrument/instrument!)
-          {:filters [(fn [n s _] (= f (symbol (str n) (str s))))]}))
+         ((resolve 'malli.instrument/instrument!) (instrument-options-for f)))
        v)))
+
+#?(:clj
+   (defn collect-private!
+     "Called by a clj defn-typed definition of a private function, `:dev` on, right after its defn:
+      registers v's function schema with malli (malli.instrument/-collect!, what collect! does for one
+      var), since collect! reads only a namespace's public vars; a later instrument! then wraps v
+      like a public function. Loads malli.instrument when nothing has yet (a dev JVM only). Returns v."
+     [v]
+     ((requiring-resolve 'malli.instrument/-collect!) v)
+     v))
 
 #?(:clj
    (def ^:dynamic *typed-checking*
@@ -1347,7 +1367,7 @@
                          (let [texts (for [{:keys [message] :as finding} findings]
                                        (str "defn-typed " (or (:file finding) file) ":" (or (:line finding) line) " " message))]
                            (if (= :error mode)
-                             (throw (ex-info (clojure.string/join "\n" texts) {::typed-findings (vec findings)}))
+                             (throw (ex-info (clojure.string/join "\n" texts) {:type ::typed-check ::typed-findings (vec findings)}))
                              (doseq [text texts] (print-err! (str "WARNING " text)))))))))
        v)))
 
@@ -1504,7 +1524,7 @@
      [ns-sym f]
      ;; the scope first: code loaded without a file binding (AOT classes) never reads the settings
      (when-let [scope (load-scope false)]
-       (when (and (setting :report-success) (not (loading? 'defn-typed.typed-clojure)))
+       (when (and (setting :dev) (setting :report-success) (not (loading? 'defn-typed.typed-clojure)))
          (let [k [ns-sym scope]
                thread (Thread/currentThread)]
            (if (contains? @load-reports k)
@@ -1526,10 +1546,24 @@
      (update-load-report! ns-sym #(assoc % :failed true))))
 
 #?(:clj
+   (defn- dev-on?
+     "Whether a clj definition expands with its dev behaviour: the `:dev` setting, the clj analogue of
+      goog.DEBUG. Off (the default), a namespace load only defines the functions: no in/out cases, no
+      defmeta registrations, no runtime unknown-key check, no instrumentation upkeep, no
+      `:stale-callers` signatures or watches, no Typed Clojure check. Literal-call checks and the
+      positional rewrite are compile time and run either way."
+     []
+     (setting :dev)))
+
+#?(:clj
    (defn- dev-only
-     "form as it runs in a dev build: cljs under goog.DEBUG (a release build drops it), clj as is."
+     "form as it runs in a dev build: cljs under goog.DEBUG (a release build drops it); clj form when
+      dev-on?, else nil (nothing emitted)."
      [cljs? form]
-     (if cljs? `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) ~form) form)))
+     (cond cljs? `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) ~form)
+           (dev-on?) form
+           ;; a clj release: the form is not emitted
+           :else nil)))
 
 #?(:clj
    (defn- pending-vars
@@ -1561,6 +1595,117 @@
                    `(inout-check! {:var (var ~fn-name) :mode ~mode :line ~(::line (meta m))
                                    :file ~(if cljs? (some-> (resolve 'cljs.analyzer/*cljs-file*) deref str) *file*)
                                    :pending ~(pending-vars env)}))))))
+
+#?(:clj
+   (defn- with-conditions
+     "body as it runs outside a defn's own condition map (in the function itself: a body whose recur
+      targets it, a table of more than 20 rows), its leading `{:pre […] :post […]}` (a map followed by
+      more body, as `fn` reads it) applied the way `fn` applies it: each :pre an assert before the
+      body, each :post an assert on the result bound to `%` (so, as in `fn`, a `recur` beside a
+      :post is no longer in tail position: a compile error). body itself without such a map."
+     [body]
+     (let [[conditions & more] body]
+       (if (and (map? conditions) more)
+         (let [{:keys [pre post]} conditions]
+           `(~@(map (fn [c] `(assert ~c)) pre)
+             ~(if (seq post)
+                `(let [~'% (do ~@more)] ~@(map (fn [c] `(assert ~c)) post) ~'%)
+                `(do ~@more))))
+         body))))
+
+#?(:clj
+   (defonce ^{:private true
+              :doc "`{<fn> <line>}`: the line of a plain `declare` of a defn-typed function (not its
+      defmeta's), seen by the defmeta above its definition, until that definition takes it."}
+     forward-declared
+     (atom {})))
+
+#?(:clj
+   (defn- plain-declare-line
+     "The line of the `declare` that last declared fn-name in *ns* when that declaration is a plain
+      one (var meta `:declared`, without defmeta's `::defmeta` mark), else nil: a literal call
+      compiled between it and the definition is a map call."
+     [fn-name]
+     (let [v (.findInternedVar ^clojure.lang.Namespace *ns* (symbol (name fn-name)))
+           m (some-> v meta)]
+       (when (and (:declared m) (not (::defmeta m)))
+         (or (:line m) 0)))))
+
+#?(:clj
+   (defonce ^{:private true
+              :doc "`{<file> [<load scope> {<simple name> [<line> …]}]}`: the literal calls of the last
+      load of each file that forward-calls! read."}
+     file-literal-calls
+     (atom {})))
+
+#?(:clj
+   (defn- source-reader
+     "A reader of file (clj `*file*`: an absolute path, or a classpath-relative one), nil when there
+      is no file to read (a REPL form, `NO_SOURCE_PATH`)."
+     ^java.io.Reader [file]
+     (let [given (java.io.File. (str file))]
+       (cond (or (nil? file) (= "NO_SOURCE_PATH" file)) nil
+             (.isFile given) (clojure.java.io/reader given)
+             :else (some-> (.getResource (clojure.lang.RT/baseLoader) (str file)) clojure.java.io/reader)))))
+
+#?(:clj
+   (defn- literal-calls
+     "`{<simple name> [<line> …]}`: every call `(f {…})` of one map-literal argument in the forms read
+      from reader, f a symbol unqualified or qualified by ns-sym (a quoted form skipped), with the
+      line of the call (the line of its top-level form when the reader gave the call none). Reads
+      in ns-sym (`::k` and aliases resolve), without `#=`; stops at the first form it cannot read."
+     [^java.io.Reader reader ns-sym]
+     (let [in (clojure.lang.LineNumberingPushbackReader. reader)
+           eof (Object.)
+           own (str ns-sym)]
+       (binding [*ns* (the-ns ns-sym) *read-eval* false]
+         (loop [found {}]
+           (let [form (try (read {:eof eof :read-cond :allow :features #{:clj}} in) (catch Exception _ eof))]
+             (if (identical? eof form)
+               found
+               (recur (reduce (fn [found call]
+                                (let [head (first call)]
+                                  (update found (name head) (fnil conj [])
+                                          (or (:line (meta call)) (:line (meta form))))))
+                              found
+                              (filter #(and (seq? %) (symbol? (first %)) (= 2 (count %)) (map? (second %))
+                                            (contains? #{nil own} (namespace (first %))))
+                                      (tree-seq #(and (coll? %) (not (and (seq? %) (= 'quote (first %)))))
+                                                #(if (map? %) (mapcat identity %) (seq %))
+                                                form)))))))))))
+
+#?(:clj
+   (defn- forward-calls
+     "The lines of the map-literal calls of fn-name in this load's file from line `from` up to its
+      definition at line `to` (literal-calls, read once per file load), sorted."
+     [{:keys [fn-name from to]}]
+     (let [file *file*
+           scope (load-scope false)
+           [cached-scope calls] (get @file-literal-calls file)
+           calls (if (and scope (identical? scope cached-scope))
+                   calls
+                   (let [read (with-open [r (or (source-reader file) (java.io.StringReader. ""))]
+                                (literal-calls r (ns-name *ns*)))]
+                     (swap! file-literal-calls assoc file [scope read])
+                     read))]
+       (sort (filter #(and (<= from %) (< % to)) (get calls (name fn-name)))))))
+
+#?(:clj
+   (defn- report-forward-calls!
+     "Reports each literal call of the function q compiled before its definition (lines, from
+      forward-calls) as the `:literal-check` mode says: `:warn` prints `defn-typed: <file>:<line>
+      calls <q> before its definition — the call compiles as a map, not positionally; move the
+      definition above the call` per call, `:error` throws an ex-info of those lines, `:off`
+      nothing."
+     [{:keys [q lines mode]}]
+     (when (and (seq lines) (not= :off mode))
+       (let [texts (for [line lines]
+                     (str "defn-typed: " (project-path *file*) ":" line " calls " q " before its definition"
+                          " — the call compiles as a map, not positionally; move the definition above the call"))]
+         (load-failed! (ns-name *ns*))
+         (if (= :error mode)
+           (throw (ex-info (clojure.string/join "\n" texts) {:type ::forward-call :fn q :lines (vec lines)}))
+           (doseq [text texts] (print-err! text)))))))
 
 #?(:clj
    (defmacro defn-typed
@@ -1598,10 +1743,10 @@
       symbol or a call is judged as the definition loads (check-var-schemas!), and so is every
       schema of a definition the Typed Clojure bridge registers."
      ([] (when-not (:ns &env) (load-failed! (ns-name *ns*)))
-         (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {})))
+         (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {:type ::invalid-form})))
      ([fn-name & more]
       (let [fail! #(do (when-not (:ns &env) (load-failed! (ns-name *ns*)))
-                       (throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name})))
+                       (throw (ex-info (str "defn-typed " fn-name ": " %) {:type ::invalid-form :fn fn-name})))
             _ (when-not (symbol? fn-name)
                 (fail! "the first argument must be the function's name"))
             _ (when (string? (first more))
@@ -1631,6 +1776,10 @@
                                in-schema)
               props (symbol (str fn-name "-props"))
               positional (symbol (str fn-name "--positional"))
+              ;; a private function (^:private on its name, or :private in its defmeta): the vars it
+              ;; expands to are private too
+              private? (boolean (or (:private (meta fn-name)) (:private (get @pending-meta (qualified &env fn-name)))))
+              def-name #(cond-> % private? (vary-meta assoc :private true))
               cljs? (boolean (:ns &env))
               q (qualified &env fn-name)
               q-props (qualified &env props)
@@ -1681,16 +1830,18 @@
               ;; m holds a key beyond the rows iff it holds more keys than rows it holds: a count and
               ;; one contains? per row on the call path, the keys themselves listed only then; clj
               ;; calls the map's own methods (RT/contains doubles the cost of the whole map call)
+              ;; dev builds only (dev-only: cljs goog.DEBUG, clj the :dev setting)
               key-check (when (not= :off unknown-keys)
                           (let [row-keys (mapv :key rows)
                                 hinted (with-meta m {:tag (if cljs? 'cljs.core/IMap 'clojure.lang.IPersistentMap)})
                                 has? (fn [k] (if cljs? `(contains? ~m ~k) `(.containsKey ~hinted ~k)))]
-                            (plumbing
-                             `(when (and (map? ~m)
-                                         (not (== ~(if cljs? `(count ~m) `(.count ~hinted))
-                                                  (+ ~@(map (fn [k] `(if ~(has? k) 1 0)) row-keys)))))
-                                (report-unknown-keys! {:fn '~q :mode ~unknown-keys :keys ~row-keys
-                                                       :unknown-keys (into [] (remove ~(set row-keys)) (keys ~m))})))))
+                            (some-> (dev-only cljs?
+                                              `(when (and (map? ~m)
+                                                          (not (== ~(if cljs? `(count ~m) `(.count ~hinted))
+                                                                   (+ ~@(map (fn [k] `(if ~(has? k) 1 0)) row-keys)))))
+                                                 (report-unknown-keys! {:fn '~q :mode ~unknown-keys :keys ~row-keys
+                                                                        :unknown-keys (into [] (remove ~(set row-keys)) (keys ~m))})))
+                                    plumbing)))
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
               spec (cond-> {:name q :props q-props
                             :rows (mapv #(select-keys % [:key :index :type :absent :required :runtime]) rows)}
@@ -1711,6 +1862,13 @@
                                                                    :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
                                                                    :file *file* :line (deref clojure.lang.Compiler/LINE)})))))]
           (swap! pending-meta dissoc q)
+          ;; clj: literal calls compiled after a plain `declare` and before this definition are map
+          ;; calls (the var had no :inline yet): reported under :literal-check
+          (when-not cljs?
+            (when-let [from (or (get (first (swap-vals! forward-declared dissoc q)) q)
+                                (plain-declare-line fn-name))]
+              (report-forward-calls! {:q q :mode (or (:literal-check spec) (setting :literal-check))
+                                      :lines (forward-calls {:fn-name fn-name :from from :to (or (:line (meta &form)) Long/MAX_VALUE)})})))
           ;; no cases above: a defmeta below, in this same load, runs them (defmeta)
           (when-not *typed-checking*
             (if (contains? defmeta-above :inout-tests)
@@ -1720,33 +1878,37 @@
           ;; check off has nothing for it to do
           (when (and cljs? (or (inline-on? true) (not= :off (or (:literal-check spec) (setting :literal-check)))))
             (install-cljs-expander! &env fn-name spec))
-          (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
-                body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))
+          (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@(with-conditions body)))
+                body-defn (when positional? `(defn ~(def-name positional) {:no-doc true} ~locals ~@body))
                 ;; clj: after the defn, callers compiled against another signature are stale (cljs:
                 ;; shadow-cljs recompiles the namespaces that depend on a changed one)
                 ;; clj: the schema vars the rows refer to — their values are part of the signature,
                 ;; and a change of one reloads this namespace (watch-schemas!)
-                deps (when-not cljs? (schema-vars (map :type rows)))
+                ;; clj dev only (dev-on?): a release load defines the functions and nothing more
+                dev-clj? (and (not cljs?) (dev-on?))
+                deps (when dev-clj? (schema-vars (map :type rows)))
                 ;; clj with Typed Clojure on the classpath: the definition is type-checked once
                 ;; evaluated (typed-check!), unless its defmeta says :off
-                typed-check-call (when (and (not cljs?) (not *typed-checking*) @typed-clojure-present
+                typed-check-call (when (and dev-clj? (not *typed-checking*) @typed-clojure-present
                                             (not= :off (:typed-check meta-keys)))
                                    (swap! typed-forms assoc q &form)
                                    [(plumbing `(typed-check! (var ~fn-name) ~(:typed-check meta-keys) ~(:line (meta &form))))])
                 ;; clj: a var malli instrumented stays instrumented through the redefinition (cljs: malli
                 ;; collects schemas at compile time, a macro, and re-instruments through
                 ;; malli.dev.cljs/start! in the hot-reload after-load hook)
-                instrumented-before-call (when-not cljs? [(plumbing `(instrumented-before! '~q))])
-                keep-instrumented-call (when-not cljs? [(plumbing `(keep-instrumented! (var ~fn-name)))])
+                instrumented-before-call (when dev-clj? [(plumbing `(instrumented-before! '~q))])
+                keep-instrumented-call (when dev-clj? [(plumbing `(keep-instrumented! (var ~fn-name)))])
+                ;; clj dev: malli's collect! reads public vars only, so a private function registers itself
+                collect-private-call (when (and dev-clj? private?) [(plumbing `(collect-private! (var ~fn-name)))])
                 ;; clj: a row or the output holding a symbol or a call is judged once evaluated, right
                 ;; after the defn, before malli registers the function's schema
-                schema-check-call (when (and (not cljs?) (seq loaded-items))
+                schema-check-call (when (and dev-clj? (seq loaded-items))
                                     [(plumbing `(check-var-schemas! (var ~fn-name)))])
                 ;; the defmeta's cases run once the definition (re-instrumented) is in place
                 inout-call (when-not *typed-checking*
                              (some-> (inout-check-call {:env &env :fn-name fn-name :m defmeta-above})
                                      plumbing vector))
-                signature-call (when-not cljs?
+                signature-call (when dev-clj?
                                  (cond-> [(plumbing `(signature! (var ~fn-name)
                                                                  ~(signature (cond-> spec (seq deps)
                                                                                (assoc :schema-values (into (sorted-map) (map (juxt symbol deref)) deps))))))]
@@ -1755,7 +1917,7 @@
                                    (conj (plumbing `(watch-schemas! (var ~fn-name) [~@(map (fn [v] `(var ~(symbol v))) deps)])))))]
             (if-not malli-opts
               `(do
-                 ~(plumbing `(def ~props ~props-form))
+                 ~(plumbing `(def ~(def-name props) ~props-form))
                  ;; the body calls name before its defn: a recursive call, name passed as a value
                  ~@(when positional? [`(declare ~fn-name) body-defn])
                  ~@instrumented-before-call
@@ -1765,6 +1927,7 @@
                              ~call)
                     positional? plumbing)
                  ~@schema-check-call
+                 ~@collect-private-call
                  ~@keep-instrumented-call
                  ~@inout-call
                  ~@signature-call
@@ -1777,11 +1940,11 @@
                     check? (gensym "check")
                     result (gensym "result")]
                 `(do
-                   ~(plumbing `(def ~props ~props-form))
-                   ~(plumbing `(def ~(with-meta slot {:no-doc true})
+                   ~(plumbing `(def ~(def-name props) ~props-form))
+                   ~(plumbing `(def ~(vary-meta (def-name slot) assoc :no-doc true)
                                  (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts})))
                    (declare ~fn-name)
-                   ~(or body-defn `(defn ~body-fn {:no-doc true} [~m] ~call))
+                   ~(or body-defn `(defn ~(def-name body-fn) {:no-doc true} [~m] ~call))
                    ~@instrumented-before-call
                    ~(plumbing
                      `(defn ~fn-name ~attrs [~m]
@@ -1793,6 +1956,7 @@
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
                    ~@schema-check-call
+                   ~@collect-private-call
                    ~@keep-instrumented-call
                    ~@inout-call
                    ~@signature-call
@@ -1821,7 +1985,7 @@
       cases there (inout-check!), the defn-typed having found none above it."
      [fn-name m]
      (let [fail! #(do (when-not (:ns &env) (load-failed! (ns-name *ns*)))
-                      (throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name})))
+                      (throw (ex-info (str "defmeta " fn-name ": " %) {:type ::invalid-form :fn fn-name})))
            cljs? (boolean (:ns &env))
            dev #(dev-only cljs? %)]
        (when-not (symbol? fn-name)
@@ -1842,12 +2006,15 @@
              m (vary-meta m assoc ::line (:line (meta &form)))]
          ;; below the definition its cases are run here, so they stay out of the next definition's
          (swap! pending-meta assoc q (cond-> m below? (dissoc :inout-tests)))
+         ;; clj: a plain `declare` above, which this defmeta's declare replaces (report-forward-calls!)
+         (when-let [line (and (not cljs?) (plain-declare-line fn-name))]
+           (swap! forward-declared assoc q line))
          `(do
-            (declare ~fn-name)
+            (declare ~(cond-> fn-name (not cljs?) (vary-meta assoc ::defmeta true)))
             ~@(when (seq other)
-                [(plumbing (dev `(register-meta! (var ~fn-name) ~other)))])
+                (some-> (dev `(register-meta! (var ~fn-name) ~other)) plumbing vector))
             ~@(when (contains? m :inout-tests)
-                [(plumbing (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))))])
+                (some-> (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))) plumbing vector))
             ~@(when below?
                 (some-> (inout-check-call {:env &env :fn-name fn-name :m m})
                         plumbing vector)))))))
@@ -1932,12 +2099,11 @@
     [:map [:s [:vector [:maybe [:map [:q {:optional true} [:int {:default 1}]]]]]]]]
    [[:int]                                    :int]])
 
-(defn malli-reasons
-  "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
-   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data.
-   defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
-   :error-message malli.error/error-message}."
-  [{:keys [explain error-message]} {:keys [type data]}]
+(defn- malli-errors
+  "malli's errors for the ex-data of a :malli.core/invalid-input ∨ :malli.core/invalid-output, each
+   with `:path`, its key path inside the one argument (a function of one argument) ∨ the args
+   (several) ∨ the result, and `:missing?`; nil for any other ex-data."
+  [explain {:keys [type data]}]
   (let [[schema value single-arg?]
         (case type
           :malli.core/invalid-input [(:input data) (:args data) (= 1 (count (:args data)))]
@@ -1945,11 +2111,21 @@
           ;; any other exception carries no malli explanation
           nil)]
     (when schema
-      (vec (for [{:keys [in value] :as error} (:errors (explain schema value))
-                 :let [path (if single-arg? (vec (rest in)) (vec in))
-                       missing? (= :malli.core/missing-key (:type error))]]
-             (str (path-text path) " · " (error-message error)
-                  (if missing? " · missing" (str " · got " (pr-str value)))))))))
+      (for [{:keys [in] :as error} (:errors (explain schema value))]
+        (assoc error
+               :path (if single-arg? (vec (rest in)) (vec in))
+               :missing? (= :malli.core/missing-key (:type error)))))))
+
+(defn malli-reasons
+  "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
+   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data.
+   defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
+   :error-message malli.error/error-message}."
+  [{:keys [explain error-message]} ex-data]
+  (when-let [errors (malli-errors explain ex-data)]
+    (vec (for [{:keys [path value missing?] :as error} errors]
+           (str (path-text path) " · " (error-message error)
+                (if missing? " · missing" (str " · got " (pr-str value))))))))
 
 (defn- case-source
   "v's registered entry when it carries cases (a `defmeta` without `:inout-tests` registers only
@@ -2064,7 +2240,7 @@
   [mode texts]
   (when (seq texts)
     (if (= :error mode)
-      (throw (ex-info (apply str (interpose "\n" texts)) {::inout-failures (vec texts)}))
+      (throw (ex-info (apply str (interpose "\n" texts)) {:type ::inout-failure ::inout-failures (vec texts)}))
       (doseq [text texts] (print-err! (str "WARNING " text))))))
 
 #?(:clj
@@ -2176,6 +2352,75 @@
      (try {:explain (requiring-resolve 'malli.core/explain)
            :error-message (requiring-resolve 'malli.error/error-message)}
           (catch Exception _ nil))))
+
+#?(:clj
+   (defn- invalid-call-text
+     "The message of a malli rejection (ex-data of a :malli.core/invalid-input ∨ -output, with the
+      `:fn-name` malli's instrument! adds under a `:report`): `defn-typed: <fn> — invalid <key path>:
+      expected <schema>, got <value>` per failing key (`invalid <key path>: missing required key`;
+      the result's path reads `output`), joined by `; `."
+     [ex-data]
+     (let [explain (requiring-resolve 'malli.core/explain)
+           form (requiring-resolve 'malli.core/form)
+           output? (= :malli.core/invalid-output (:type ex-data))]
+       (str "defn-typed: " (or (:fn-name (:data ex-data)) "an instrumented function") " — "
+            (clojure.string/join
+             "; "
+             (for [{:keys [path value missing? schema]} (malli-errors explain ex-data)
+                   :let [where (cond (and output? (empty? path)) "output"
+                                     output? (str "output " (path-text path))
+                                     :else (path-text path))]]
+               (if missing?
+                 (str "invalid " where ": missing required key")
+                 (str "invalid " where ": expected " (pr-str (form schema)) ", got " (pr-str value)))))))))
+
+#?(:clj
+   (defn report-invalid-call!
+     "The `:report` defn-typed.core/instrument! gives malli unless its options carry one: malli's
+      own report (malli.core/-fail!, so a reporter malli.dev/start! captured there still runs) whose
+      exception is thrown again with invalid-call-text as its message, the ex-data and cause
+      unchanged. A -fail! that returns instead of throwing: its value."
+     [type data]
+     (try ((requiring-resolve 'malli.core/-fail!) type data)
+          (catch clojure.lang.ExceptionInfo e
+            (throw (ex-info (invalid-call-text (ex-data e)) (ex-data e) (ex-cause e)))))))
+
+#?(:clj
+   (defonce ^{:private true
+              :doc "The options the last defn-typed.core/instrument! got, nil before the first: what a
+      redefinition re-instruments its function with (keep-instrumented!)."}
+     instrument-options
+     (atom nil)))
+
+#?(:clj
+   (defn- with-default-report
+     "options with report-invalid-call! as `:report` unless they carry one."
+     [options]
+     (update options :report #(or % report-invalid-call!))))
+
+#?(:clj
+   (defn instrument!
+     "malli.instrument/instrument! with options (malli's: `:filters`, `:report`, `:scope`, `:gen`,
+      `:data`), report-invalid-call! as the default `:report` (a rejection reads `defn-typed: <fn> —
+      invalid :<key>: expected <schema>, got <value>`; an options `:report` wins), and the options
+      kept for re-instrumenting a redefined function (keep-instrumented!). Returns what malli's
+      instrument! returns. With `:dev` off: a no-op returning nil."
+     ([] (instrument! nil))
+     ([options]
+      (when (setting :dev)
+        (reset! instrument-options options)
+        ((requiring-resolve 'malli.instrument/instrument!) (with-default-report options))))))
+
+#?(:clj
+   (defn- instrument-options-for
+     "The options keep-instrumented! re-instruments the function f (a qualified symbol) with: the last
+      defn-typed.core/instrument!'s, without `:data`, filtered to f alone; `{:filters [f]}` when the
+      instrumentation came from malli's own instrument!."
+     [f]
+     (let [only-f [(fn [n s _] (= f (symbol (str n) (str s))))]]
+       (if-let [options @instrument-options]
+         (-> options (dissoc :data) (assoc :filters only-f) with-default-report)
+         {:filters only-f}))))
 
 #?(:clj
    (defn assert-cases
