@@ -422,7 +422,7 @@
 
 (def ^:private order-fixture
   "Namespace k (after hook-findings' ns line): a defn-typed under its defmeta whose body leaves
-   :discount unread, and one whose recur targets the function; then namespace k2 calling the first
+   :discount unread (kondo's unused binding), and one whose recur targets the function; then namespace k2 calling the first
    with a map and positionally."
   (str/join "\n" ["(defmeta order-total"
                   "  {:doc \"Order total.\""
@@ -444,18 +444,34 @@
                   "[(order-total {:price 100 :qty 2}) (order-total--positional 100 2 0) (countdown {:n 3 :acc 0})]"]))
 
 (deftest kondo-hook-lints-the-expansion
-  (testing "the exported hooks define <name>-props, name and <name>--positional: a positional call from another namespace resolves; an unread row and a (recur {…}) in a body kept in name report nothing"
-    (is (= [] (hook-findings order-fixture))))
+  (testing "the exported hooks define <name>-props, name and <name>--positional: a positional call from another namespace resolves, a (recur {…}) in a body kept in name reports nothing; a row the body never reads is kondo's unused binding, at its key"
+    (is (= [[9 3 :unused-binding "unused binding discount"]]
+           (hook-findings order-fixture (juxt :row :col :type :message)))))
+  (testing "a row a body kept in name never reads: the same finding"
+    (is (= [[2 24 :unused-binding "unused binding c"]]
+           (hook-findings "(defn-typed h {:a :int :c :int} -> :int (if (pos? a) (recur {:a (dec a) :c 1}) a))"
+                          (juxt :row :col :type :message)))))
+  (testing "the defn the hook emits carries the defmeta's :doc (clojure-lsp hover reads the analysis)"
+    (is (= {'order-total "Order total." 'countdown nil}
+           (->> (with-in-str (str "(ns k (:require [defn-typed.core :refer [defn-typed defnt defmeta]]))\n" order-fixture)
+                  (kondo/run! {:lint ["-"] :lang :clj :cache false :config {:analysis true}
+                               :config-dir "resources/clj-kondo.exports/io.github.hyperfocusdisordered/defn-typed"}))
+                :analysis :var-definitions
+                (filter #(and (= 'k (:ns %)) ('#{order-total countdown} (:name %))))
+                (map (juxt :name :doc))
+                (into {})))))
   (testing "a positional call with the wrong arity is one :invalid-arity finding"
-    (is (= [[20 :invalid-arity "k/order-total--positional is called with 1 arg but expects 3"]]
+    (is (= [[9 :unused-binding "unused binding discount"]
+            [20 :invalid-arity "k/order-total--positional is called with 1 arg but expects 3"]]
            (hook-findings (str order-fixture "\n(order-total--positional 100)") (juxt :row :type :message)))))
   (testing "20 rows define <name>--positional; more keep the body in name, as the macro does: no positional var"
-    (let [table #(str "{" (str/join " " (map (fn [i] (str ":a" i " :int")) (range 1 (inc %)))) "}")]
+    (let [table #(str "{" (str/join " " (map (fn [i] (str ":a" i " :int")) (range 1 (inc %)))) "}")
+          sum #(str "(+ " (str/join " " (map (fn [i] (str "a" i)) (range 1 (inc %)))) ")")]
       (is (= [[3 :invalid-arity "k/narrow--positional is called with 1 arg but expects 20"]]
-             (hook-findings (str "(defn-typed narrow " (table 20) " -> :int a1)\n(narrow--positional 1)")
+             (hook-findings (str "(defn-typed narrow " (table 20) " -> :int " (sum 20) ")\n(narrow--positional 1)")
                             (juxt :row :type :message))))
       (is (= [[3 :unresolved-symbol "Unresolved symbol: wide--positional"]]
-             (hook-findings (str "(defn-typed wide " (table 21) " -> :int a1)\n(wide--positional 1)")
+             (hook-findings (str "(defn-typed wide " (table 21) " -> :int " (sum 21) ")\n(wide--positional 1)")
                             (juxt :row :type :message)))))))
 
 (defn- expand-cljs-defn-typed
