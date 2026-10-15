@@ -7,7 +7,10 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [defn-typed.typed-bugs]
+            [defn-typed.core :as core]
             [defn-typed.typed-clojure :refer [install! check-form!]]))
+
+(core/deftests! 'defn-typed.typed-api-cases)
 
 (def fixture "test-typed/defn_typed/typed_bugs.clj")
 

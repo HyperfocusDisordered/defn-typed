@@ -12,6 +12,7 @@
             [malli.instrument :as mi]))
 
 (core/deftests! 'defn-typed.core)
+(core/deftests! 'defn-typed.api-cases)
 
 (defmeta padded
   {:doc "a + b, b defaulting to 2."
