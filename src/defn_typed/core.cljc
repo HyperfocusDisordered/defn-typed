@@ -1597,6 +1597,23 @@
                                    :pending ~(pending-vars env)}))))))
 
 #?(:clj
+   (defn- with-conditions
+     "body as it runs outside a defn's own condition map (in the function itself: a body whose recur
+      targets it, a table of more than 20 rows), its leading `{:pre […] :post […]}` (a map followed by
+      more body, as `fn` reads it) applied the way `fn` applies it: each :pre an assert before the
+      body, each :post an assert on the result bound to `%` (so, as in `fn`, a `recur` beside a
+      :post is no longer in tail position: a compile error). body itself without such a map."
+     [body]
+     (let [[conditions & more] body]
+       (if (and (map? conditions) more)
+         (let [{:keys [pre post]} conditions]
+           `(~@(map (fn [c] `(assert ~c)) pre)
+             ~(if (seq post)
+                `(let [~'% (do ~@more)] ~@(map (fn [c] `(assert ~c)) post) ~'%)
+                `(do ~@more))))
+         body))))
+
+#?(:clj
    (defonce ^{:private true
               :doc "`{<fn> <line>}`: the line of a plain `declare` of a defn-typed function (not its
       defmeta's), seen by the defmeta above its definition, until that definition takes it."}
@@ -1861,7 +1878,7 @@
           ;; check off has nothing for it to do
           (when (and cljs? (or (inline-on? true) (not= :off (or (:literal-check spec) (setting :literal-check)))))
             (install-cljs-expander! &env fn-name spec))
-          (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
+          (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@(with-conditions body)))
                 body-defn (when positional? `(defn ~(def-name positional) {:no-doc true} ~locals ~@body))
                 ;; clj: after the defn, callers compiled against another signature are stale (cljs:
                 ;; shadow-cljs recompiles the namespaces that depend on a changed one)

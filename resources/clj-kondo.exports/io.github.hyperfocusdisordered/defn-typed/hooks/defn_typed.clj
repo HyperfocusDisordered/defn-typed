@@ -66,6 +66,26 @@
       (= 'letfn head) (boolean (some self-recur? (nnext children)))
       :else (boolean (some self-recur? children)))))
 
+(defn- with-conditions
+  "Mirrors defn-typed.core/with-conditions for a body that stays in name: a leading condition map
+   (a map followed by more body) becomes `(assert c)` per :pre before the body and, with :post,
+   `(let [% (do body…)] (assert c) … %)`, so `%` and the rows resolve as the macro runs them."
+  [body]
+  (let [[conditions & more] body
+        entries (when (and conditions (api/map-node? conditions) more)
+                  (into {} (map (fn [[k v]] [(api/sexpr k) v])) (partition 2 (:children conditions))))
+        asserts #(map (fn [c] (api/list-node [(api/token-node 'assert) c])) (:children %))]
+    (if entries
+      (concat (some-> (get entries :pre) asserts)
+              [(if-let [post (get entries :post)]
+                 (api/list-node (concat [(api/token-node 'let)
+                                         (api/vector-node [(api/token-node '%)
+                                                           (api/list-node (cons (api/token-node 'do) more))])]
+                                        (asserts post)
+                                        [(api/token-node '%)]))
+                 (api/list-node (cons (api/token-node 'do) more)))])
+      body)))
+
 (defn- name-node?
   "Whether node is a symbol token: the function's name."
   [node]
@@ -201,7 +221,9 @@
                            (api/vector-node locals)
                            (body-let [(api/token-node '_) (api/vector-node locals)])])]
                    ;; no positional fn (see positional?): the body stays in name
-                   [(defn-name (body-let (concat rows-of-m [(api/token-node '_) (api/vector-node locals)])))])))})))
+                   [(defn-name (api/list-node (concat [(api/token-node 'let)
+                                                       (api/vector-node (concat rows-of-m [(api/token-node '_) (api/vector-node locals)]))]
+                                                      (with-conditions body))))])))})))
 
 (defn defn-typed [{:keys [node]}]
   (if (nil? (second (:children node)))

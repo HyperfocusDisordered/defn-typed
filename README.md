@@ -346,6 +346,10 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
   same line as its message.
 - A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
   a compile error naming the function. Single arity only.
+- A condition map `{:pre […] :post […]}` first in the body works as in `fn`, wherever the body
+  lands (`<name>--positional`, or the function itself when its body `recur`s to it or it has more
+  than 20 rows). As in `fn`, `:post` beside a `recur` to the function is a compile error (`Can only
+  recur from tail position`).
 - A row or output schema malli cannot build is a compile error naming the function, the row,
   malli's error and the file:line; a schema held in a var is judged as the definition loads. clj
   judges once malli is loaded (a dev/test/REPL loader, the Typed Clojure bridge), cljs builds
