@@ -92,7 +92,7 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 {:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.3.2"}}}
 
 ;; deps.edn, from git
-{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.3.2" :git/sha "PENDING"}}}
+{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.3.2" :git/sha "a01b52f"}}}
 
 ;; shadow-cljs.edn
 {:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.3.2"]]}
