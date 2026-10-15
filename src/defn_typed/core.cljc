@@ -22,9 +22,10 @@
    expand-call, a redefinition with another signature reloads the namespaces whose calls compiled
    to the old positional call, and a changed schema var reloads the function's namespace
    (`:stale-callers` in defn-typed.edn). A definition whose defmeta holds cases runs them as it
-   loads (inout-check!, `:inout-check` in defn-typed.edn; cljs dev builds only). With Typed Clojure
-   on the classpath a clj definition then calls (typed-check! #'f …), which type-checks it
-   (`:typed-check` in defn-typed.edn).
+   loads (inout-check!, `:inout-check` in defn-typed.edn). With Typed Clojure on the classpath a
+   clj definition then calls (typed-check! #'f …), which type-checks it (`:typed-check` in
+   defn-typed.edn). Everything a definition does at load besides defining the function exists in
+   dev builds only: clj with `:dev` on (`-Ddefn-typed.dev=true`), cljs under goog.DEBUG.
    The macro marks a row with a default `:optional`: instrumentation checks the call before the
    defaults are filled. Callers require both unprefixed: (:require [defn-typed.core :refer [defn-typed defmeta]]).
    `defnt` = defn-typed under a short name.
@@ -536,8 +537,9 @@
    (def ^:private setting-values
      "The settings of defn-typed.edn and their allowed values, the first one the default.
       `:literal-check`, `:unknown-keys`, `:typed-check` and `:inout-check` also take a per-function
-      value in `defmeta`."
-     {:literal-check [:warn :error :off]
+      value in `defmeta`. `:dev` = the clj analogue of goog.DEBUG (dev-on?)."
+     {:dev [false true]
+      :literal-check [:warn :error :off]
       :unknown-keys [:warn :error :off]
       :inline [true false]
       :stale-callers [:reload :warn :off]
@@ -565,8 +567,8 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn
-      :inout-check :warn :report-success false}`,
+      `{:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload
+      :typed-check :warn :inout-check :warn :report-success false}`,
       merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
       outside the key's allowed ones."
@@ -596,8 +598,8 @@
 #?(:clj
    (defn- setting
      "A setting's value for the whole project: the JVM system property `defn-typed.<key>` when set
-      (`defn-typed.inline`: anything but `false` is on; `defn-typed.report-success`: `true` is on,
-      anything else off; `defn-typed.literal-check`,
+      (`defn-typed.inline`: anything but `false` is on; `defn-typed.dev` and
+      `defn-typed.report-success`: `true` is on, anything else off; `defn-typed.literal-check`,
       `defn-typed.unknown-keys`, `defn-typed.typed-check` and `defn-typed.inout-check`: `warn`, `error`
       or `off`; `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's
       defn-typed.edn, else the default. A function's own `:literal-check` / `:unknown-keys` /
@@ -607,7 +609,7 @@
        (cond
          (nil? property) (get @project-settings k)
          (= :inline k) (not= "false" property)
-         (= :report-success k) (= "true" property)
+         (#{:dev :report-success} k) (= "true" property)
          (some #{(keyword property)} (get setting-values k)) (keyword property)
          :else (throw (ex-info (str "defn-typed: the system property defn-typed." (name k)
                                     " must be one of " (apply str (interpose ", " (map name (get setting-values k))))
@@ -649,9 +651,10 @@
 #?(:clj
    (defn- record-inlined-caller!
      "Records *ns* as a caller of f (a qualified symbol) in inlined-callers when the positional call
-      compiles from a file: a call typed into a REPL (file `NO_SOURCE_PATH`) has no file to reload."
+      compiles from a file with `:dev` on: a call typed into a REPL (file `NO_SOURCE_PATH`) has no
+      file to reload, and a release JVM has no stale callers to act on."
      [f file]
-     (when (and file (not= "NO_SOURCE_PATH" file))
+     (when (and file (not= "NO_SOURCE_PATH" file) (setting :dev))
        (swap! inlined-callers update f (fnil conj #{}) (ns-name *ns*)))))
 
 #?(:clj
@@ -1504,7 +1507,7 @@
      [ns-sym f]
      ;; the scope first: code loaded without a file binding (AOT classes) never reads the settings
      (when-let [scope (load-scope false)]
-       (when (and (setting :report-success) (not (loading? 'defn-typed.typed-clojure)))
+       (when (and (setting :dev) (setting :report-success) (not (loading? 'defn-typed.typed-clojure)))
          (let [k [ns-sym scope]
                thread (Thread/currentThread)]
            (if (contains? @load-reports k)
@@ -1526,10 +1529,24 @@
      (update-load-report! ns-sym #(assoc % :failed true))))
 
 #?(:clj
+   (defn- dev-on?
+     "Whether a clj definition expands with its dev behaviour: the `:dev` setting, the clj analogue of
+      goog.DEBUG. Off (the default), a namespace load only defines the functions: no in/out cases, no
+      defmeta registrations, no runtime unknown-key check, no instrumentation upkeep, no
+      `:stale-callers` signatures or watches, no Typed Clojure check. Literal-call checks and the
+      positional rewrite are compile time and run either way."
+     []
+     (setting :dev)))
+
+#?(:clj
    (defn- dev-only
-     "form as it runs in a dev build: cljs under goog.DEBUG (a release build drops it), clj as is."
+     "form as it runs in a dev build: cljs under goog.DEBUG (a release build drops it); clj form when
+      dev-on?, else nil (nothing emitted)."
      [cljs? form]
-     (if cljs? `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) ~form) form)))
+     (cond cljs? `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) ~form)
+           (dev-on?) form
+           ;; a clj release: the form is not emitted
+           :else nil)))
 
 #?(:clj
    (defn- pending-vars
@@ -1681,16 +1698,18 @@
               ;; m holds a key beyond the rows iff it holds more keys than rows it holds: a count and
               ;; one contains? per row on the call path, the keys themselves listed only then; clj
               ;; calls the map's own methods (RT/contains doubles the cost of the whole map call)
+              ;; dev builds only (dev-only: cljs goog.DEBUG, clj the :dev setting)
               key-check (when (not= :off unknown-keys)
                           (let [row-keys (mapv :key rows)
                                 hinted (with-meta m {:tag (if cljs? 'cljs.core/IMap 'clojure.lang.IPersistentMap)})
                                 has? (fn [k] (if cljs? `(contains? ~m ~k) `(.containsKey ~hinted ~k)))]
-                            (plumbing
-                             `(when (and (map? ~m)
-                                         (not (== ~(if cljs? `(count ~m) `(.count ~hinted))
-                                                  (+ ~@(map (fn [k] `(if ~(has? k) 1 0)) row-keys)))))
-                                (report-unknown-keys! {:fn '~q :mode ~unknown-keys :keys ~row-keys
-                                                       :unknown-keys (into [] (remove ~(set row-keys)) (keys ~m))})))))
+                            (some-> (dev-only cljs?
+                                              `(when (and (map? ~m)
+                                                          (not (== ~(if cljs? `(count ~m) `(.count ~hinted))
+                                                                   (+ ~@(map (fn [k] `(if ~(has? k) 1 0)) row-keys)))))
+                                                 (report-unknown-keys! {:fn '~q :mode ~unknown-keys :keys ~row-keys
+                                                                        :unknown-keys (into [] (remove ~(set row-keys)) (keys ~m))})))
+                                    plumbing)))
               malli-opts (let [v (:malli-in-prod meta-keys)] (when (and v (not= false v)) v))
               spec (cond-> {:name q :props q-props
                             :rows (mapv #(select-keys % [:key :index :type :absent :required :runtime]) rows)}
@@ -1726,27 +1745,29 @@
                 ;; shadow-cljs recompiles the namespaces that depend on a changed one)
                 ;; clj: the schema vars the rows refer to — their values are part of the signature,
                 ;; and a change of one reloads this namespace (watch-schemas!)
-                deps (when-not cljs? (schema-vars (map :type rows)))
+                ;; clj dev only (dev-on?): a release load defines the functions and nothing more
+                dev-clj? (and (not cljs?) (dev-on?))
+                deps (when dev-clj? (schema-vars (map :type rows)))
                 ;; clj with Typed Clojure on the classpath: the definition is type-checked once
                 ;; evaluated (typed-check!), unless its defmeta says :off
-                typed-check-call (when (and (not cljs?) (not *typed-checking*) @typed-clojure-present
+                typed-check-call (when (and dev-clj? (not *typed-checking*) @typed-clojure-present
                                             (not= :off (:typed-check meta-keys)))
                                    (swap! typed-forms assoc q &form)
                                    [(plumbing `(typed-check! (var ~fn-name) ~(:typed-check meta-keys) ~(:line (meta &form))))])
                 ;; clj: a var malli instrumented stays instrumented through the redefinition (cljs: malli
                 ;; collects schemas at compile time, a macro, and re-instruments through
                 ;; malli.dev.cljs/start! in the hot-reload after-load hook)
-                instrumented-before-call (when-not cljs? [(plumbing `(instrumented-before! '~q))])
-                keep-instrumented-call (when-not cljs? [(plumbing `(keep-instrumented! (var ~fn-name)))])
+                instrumented-before-call (when dev-clj? [(plumbing `(instrumented-before! '~q))])
+                keep-instrumented-call (when dev-clj? [(plumbing `(keep-instrumented! (var ~fn-name)))])
                 ;; clj: a row or the output holding a symbol or a call is judged once evaluated, right
                 ;; after the defn, before malli registers the function's schema
-                schema-check-call (when (and (not cljs?) (seq loaded-items))
+                schema-check-call (when (and dev-clj? (seq loaded-items))
                                     [(plumbing `(check-var-schemas! (var ~fn-name)))])
                 ;; the defmeta's cases run once the definition (re-instrumented) is in place
                 inout-call (when-not *typed-checking*
                              (some-> (inout-check-call {:env &env :fn-name fn-name :m defmeta-above})
                                      plumbing vector))
-                signature-call (when-not cljs?
+                signature-call (when dev-clj?
                                  (cond-> [(plumbing `(signature! (var ~fn-name)
                                                                  ~(signature (cond-> spec (seq deps)
                                                                                (assoc :schema-values (into (sorted-map) (map (juxt symbol deref)) deps))))))]
@@ -1845,9 +1866,9 @@
          `(do
             (declare ~fn-name)
             ~@(when (seq other)
-                [(plumbing (dev `(register-meta! (var ~fn-name) ~other)))])
+                (some-> (dev `(register-meta! (var ~fn-name) ~other)) plumbing vector))
             ~@(when (contains? m :inout-tests)
-                [(plumbing (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))))])
+                (some-> (dev `(register-tests! (var ~fn-name) (single-arg-pairs '~q ~(:inout-tests m)))) plumbing vector))
             ~@(when below?
                 (some-> (inout-check-call {:env &env :fn-name fn-name :m m})
                         plumbing vector)))))))

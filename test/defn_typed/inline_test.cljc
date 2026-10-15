@@ -197,24 +197,32 @@
              (try (f) (apply str @seen)
                   (finally (set! (.-warn js/console) before))))))
 
+(def dev?
+  "Whether this build checks real maps' keys at run time: clj the `:dev` setting (the test alias
+   sets it), cljs goog.DEBUG (a release build drops the check)."
+  #?(:clj (= "true" (System/getProperty "defn-typed.dev"))
+     :cljs ^boolean goog.DEBUG))
+
 (deftest runtime-unknown-keys
   (testing ":warn (the default): a real map holding a key beyond the rows prints one line per (function, set of unknown keys); the call proceeds"
     (let [m {:a 1 :zz 5}
           same-set {:a 2 :zz 6}
           two {:a 1 :yy 1 :zz 1}]
-      (is (= "defn-typed: defn-typed.inline-test/keyed unknown key :zz — the keys are :a :b :c\n"
+      (is (= (if dev? "defn-typed: defn-typed.inline-test/keyed unknown key :zz — the keys are :a :b :c\n" "")
              (warnings-of #(is (= [1 2 nil] (keyed m))))))
       (is (= "" (warnings-of #(is (= [2 2 nil] (keyed same-set))))))
-      (is (re-find #"^defn-typed: defn-typed.inline-test/keyed unknown keys (:yy :zz|:zz :yy) — the keys are :a :b :c\n$"
+      (is (re-find (if dev? #"^defn-typed: defn-typed.inline-test/keyed unknown keys (:yy :zz|:zz :yy) — the keys are :a :b :c\n$" #"^$")
                    (warnings-of #(keyed two))))))
   (testing "no unknown key: nothing printed"
     (let [m {:a 1 :b 3 :c nil}]
       (is (= "" (warnings-of #(is (= [1 3 nil] (keyed m))))))))
-  (testing "defmeta :unknown-keys :error: throws that text with {:fn :unknown-keys :keys}"
+  (testing "defmeta :unknown-keys :error: throws that text with {:fn :unknown-keys :keys} (a release build: no check, the call proceeds)"
     (let [m {:a 1 :zz 2}
           e (try (keyed-strict m) nil (catch #?(:clj Exception :cljs :default) e e))]
-      (is (= "defn-typed: defn-typed.inline-test/keyed-strict unknown key :zz — the keys are :a" (ex-message e)))
-      (is (= {:fn 'defn-typed.inline-test/keyed-strict :unknown-keys [:zz] :keys [:a]} (ex-data e))))
+      (if dev?
+        (do (is (= "defn-typed: defn-typed.inline-test/keyed-strict unknown key :zz — the keys are :a" (ex-message e)))
+            (is (= {:fn 'defn-typed.inline-test/keyed-strict :unknown-keys [:zz] :keys [:a]} (ex-data e))))
+        (is (nil? e))))
     (let [m {:a 1}]
       (is (= 1 (keyed-strict m)))))
   (testing "defmeta :unknown-keys :off: no check"
@@ -499,16 +507,16 @@
          (let [file (fn [content] (let [root (settings-tree {"defn-typed.edn" content})] (java.io.File. root "defn-typed.edn")))
                error (fn [content] (try (settings-of-file (file content)) nil
                                         (catch clojure.lang.ExceptionInfo e (ex-message e))))]
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file nil)))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{}"))))
-           (is (= {:literal-check :error :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:literal-check :error}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline false :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:literal-check :warn :inline false}"))))
-           (is (= {:literal-check :off :unknown-keys :off :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
-           (is (= {:literal-check :warn :unknown-keys :error :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:unknown-keys :error}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:stale-callers :warn}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :off :inout-check :warn :report-success false} (settings-of-file (file "{:typed-check :off}"))))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :error :report-success false} (settings-of-file (file "{:inout-check :error}"))))
-           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :literal-check, :unknown-keys, :inline, :stale-callers, :typed-check, :inout-check, :report-success$"
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file nil)))
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{}"))))
+           (is (= {:dev false :literal-check :error :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:literal-check :error}"))))
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline false :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:literal-check :warn :inline false}"))))
+           (is (= {:dev false :literal-check :off :unknown-keys :off :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:literal-check :off :unknown-keys :off}"))))
+           (is (= {:dev false :literal-check :warn :unknown-keys :error :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:unknown-keys :error}"))))
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn :typed-check :warn :inout-check :warn :report-success false} (settings-of-file (file "{:stale-callers :warn}"))))
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :off :inout-check :warn :report-success false} (settings-of-file (file "{:typed-check :off}"))))
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :error :report-success false} (settings-of-file (file "{:inout-check :error}"))))
+           (is (re-find #"^defn-typed .*defn-typed\.edn: unknown key :strict — the keys are :dev, :literal-check, :unknown-keys, :inline, :stale-callers, :typed-check, :inout-check, :report-success$"
                         (error "{:strict true}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :literal-check must be one of :warn, :error, :off, got :fail$"
                         (error "{:literal-check :fail}")))
@@ -522,7 +530,7 @@
                         (error "{:inout-check :loud}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :inline must be one of true, false, got \"no\"$"
                         (error "{:inline \"no\"}")))
-           (is (= {:literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success true} (settings-of-file (file "{:report-success true}"))))
+           (is (= {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload :typed-check :warn :inout-check :warn :report-success true} (settings-of-file (file "{:report-success true}"))))
            (is (re-find #"^defn-typed .*defn-typed\.edn: :report-success must be one of false, true, got \"yes\"$"
                         (error "{:report-success \"yes\"}")))
            (is (re-find #"^defn-typed .*defn-typed\.edn: the settings must be a map, got \[:error\]$"

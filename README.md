@@ -500,11 +500,23 @@ shadow-cljs run in `miniapp/`, and a nearer file overrides it. It is read once p
 first macroexpansion; no file = the defaults.
 
 ```clojure
-{:literal-check  :warn   ; :warn (default) | :error
+{:dev            false   ; false (default) | true
+ :literal-check  :warn   ; :warn (default) | :error
  :inline         true    ; true (default) | false
  :report-success false}  ; false (default) | true
 ```
 
+- `:dev`: the Clojure analogue of `goog.DEBUG`, one switch for everything a definition does at
+  load besides defining the function. Dev, test and REPL JVMs set it with
+  `-Ddefn-typed.dev=true` (see the aliases below); production leaves it unset.
+
+  What a release JVM (`:dev false`) does when it loads a namespace: nothing beyond defining the
+  functions. It runs no in/out cases, registers no `defmeta` cases, emits no unknown-key check on
+  real-map calls, keeps no instrumentation upkeep, puts no `:stale-callers` watch and records no
+  signature, and runs no Typed Clojure check. Compile-time work stays: literal calls are checked
+  (`:literal-check`) and rewritten to positional calls (`:inline`) in every build.
+  ClojureScript has no `:dev` setting: `goog.DEBUG` is its signal, so a release build drops the same
+  things and a dev build keeps them.
 - `:literal-check`: a literal call that fails its compile-time check (see Compile-time literal
   checks) prints its `WARNING defn-typed …` line and compiles to the map call (`:warn`), or is a
   compile error with the same text (`:error`): the namespace does not load, the build fails.
@@ -545,12 +557,12 @@ Syntax error (ExceptionInfo) compiling order-total at (shop.clj:12:3).
 defn-typed shop.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
 
-Dev and test keep the map call, so instrumentation checks every call; their aliases set the
-property (the file is shared with production builds):
+Dev and test turn the dev behaviour on and keep the map call, so instrumentation checks every
+call; their aliases set the properties (the file is shared with production builds):
 
 ```clojure
-:aliases {:test  {:jvm-opts ["-Ddefn-typed.inline=false"] …}
-          :nrepl {:jvm-opts ["-Ddefn-typed.inline=false"] …}}
+:aliases {:test  {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"] …}
+          :nrepl {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"] …}}
 ```
 
 ## Checks run in dev/test only
