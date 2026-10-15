@@ -1642,20 +1642,20 @@
 
 #?(:clj
    (defonce ^{:private true
-              :doc "`{<fn> <line>}`: the line of a plain `declare` of a defn-typed function (not its
-      defmeta's), seen by the defmeta above its definition, until that definition takes it."}
+              :doc "`{<fn> <line>}`: the line of a `declare` of a defn-typed function written above its
+      defmeta, which the defmeta's own declare replaces, until that definition takes it."}
      forward-declared
      (atom {})))
 
 #?(:clj
-   (defn- plain-declare-line
-     "The line of the `declare` that last declared fn-name in *ns* when that declaration is a plain
-      one (var meta `:declared`, without defmeta's `::defmeta` mark), else nil: a literal call
-      compiled between it and the definition is a map call."
+   (defn- declared-line
+     "The line of the declaration of fn-name in *ns* (var meta `:declared`: a plain `declare` or a
+      defmeta's) while the var is declared and not defined, else nil: a literal call compiled
+      between it and the definition is a map call."
      [fn-name]
      (let [v (.findInternedVar ^clojure.lang.Namespace *ns* (symbol (name fn-name)))
            m (some-> v meta)]
-       (when (and (:declared m) (not (::defmeta m)))
+       (when (:declared m)
          (or (:line m) 0)))))
 
 #?(:clj
@@ -1871,11 +1871,12 @@
                                                                    :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
                                                                    :file *file* :line (deref clojure.lang.Compiler/LINE)})))))]
           (swap! pending-meta dissoc q)
-          ;; clj: literal calls compiled after a plain `declare` and before this definition are map
-          ;; calls (the var had no :inline yet): reported under :literal-check
+          ;; clj: literal calls compiled after a `declare` (a plain one, or the defmeta's) and
+          ;; before this definition are map calls (the var had no :inline yet): reported under
+          ;; :literal-check
           (when-not cljs?
             (when-let [from (or (get (first (swap-vals! forward-declared dissoc q)) q)
-                                (plain-declare-line fn-name))]
+                                (declared-line fn-name))]
               (report-forward-calls! {:q q :mode (or (:literal-check spec) (setting :literal-check))
                                       :lines (forward-calls {:fn-name fn-name :from from :to (or (:line (meta &form)) Long/MAX_VALUE)})})))
           ;; no cases above: a defmeta below, in this same load, runs them (defmeta)
@@ -2015,11 +2016,11 @@
              m (vary-meta m assoc ::line (:line (meta &form)))]
          ;; below the definition its cases are run here, so they stay out of the next definition's
          (swap! pending-meta assoc q (cond-> m below? (dissoc :inout-tests)))
-         ;; clj: a plain `declare` above, which this defmeta's declare replaces (report-forward-calls!)
-         (when-let [line (and (not cljs?) (plain-declare-line fn-name))]
+         ;; clj: a `declare` above, which this defmeta's declare replaces (report-forward-calls!)
+         (when-let [line (and (not cljs?) (declared-line fn-name))]
            (swap! forward-declared assoc q line))
          `(do
-            (declare ~(cond-> fn-name (not cljs?) (vary-meta assoc ::defmeta true)))
+            (declare ~fn-name)
             ~@(when (seq other)
                 (some-> (dev `(register-meta! (var ~fn-name) ~other)) plumbing vector))
             ~@(when (contains? m :inout-tests)

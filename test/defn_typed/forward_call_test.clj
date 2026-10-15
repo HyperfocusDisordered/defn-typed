@@ -50,6 +50,19 @@
   (testing "without the defmeta: the same"
     (let [{:keys [path err]} (load-source! 'forward.bare (into (subvec source 0 4) (subvec source 6)) nil)]
       (is (= [(line path 'forward.bare)] (str/split-lines err)))))
+  (testing "declared by its defmeta alone: a call between the defmeta and the definition is the same forward call"
+    (let [{:keys [path err]} (load-source! 'forward.defmeta
+                                           ["(defmeta later {:doc \"Its x.\"})"
+                                            ""
+                                            "(defn use-later [] (later {:x 1}))"
+                                            ""
+                                            "(defn-typed later {:x :int} -> :int"
+                                            "  x"
+                                            ")"
+                                            ""
+                                            "(defn use-after [] (later {:x 2}))"]
+                                           nil)]
+      (is (= [(line path 'forward.defmeta)] (str/split-lines err)))))
   (testing ":error: the definition fails with that line"
     (let [{:keys [path thrown]} (load-source! 'forward.error source :error)]
       (is (= (line path 'forward.error) thrown))))
