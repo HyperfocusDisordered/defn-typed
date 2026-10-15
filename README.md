@@ -179,7 +179,7 @@ What is checked where:
   [malli in production](#malli-in-production)). The types live in `.clj-kondo`, instrumentation
   only in dev/test.
 
-Using Claude Code? [examples/claude-code](examples/claude-code) gives the agent this check after every edit.
+An after-edit hook that reloads, emits the types and lints: [examples/claude-code](examples/claude-code).
 
 ## Typed Clojure
 
@@ -221,8 +221,9 @@ definition is then checked as it loads, see `:typed-check` in [Configuration](#c
 - Every form the macro generates without your code in it carries `^:typed.clojure/ignore`, so
   the checker sees your body and your calls, not the expansion.
 
-What it finds, on the seven planted bugs of
-[test-typed/defn_typed/typed_bugs.clj](test-typed/defn_typed/typed_bugs.clj):
+What it finds, on seven of the 14 planted bugs of
+[test-typed/defn_typed/typed_bugs.clj](test-typed/defn_typed/typed_bugs.clj) (Typed Clojure reports
+all 14; `typed_clojure_test.clj` asserts each one):
 
 | Bug | Example | Typed Clojure | clj-kondo |
 |---|---|---|---|
@@ -308,7 +309,8 @@ A real one, from the app this library was extracted from:
 )
 ```
 
-The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them verbatim).
+The README's four marked blocks (these three and `first-of` under Generic functions) run as a test
+(`test/defn_typed/readme_test.clj` evaluates them verbatim and asserts there are four).
 
 ## Syntax
 
@@ -434,7 +436,11 @@ positional call:
 ```clojure
 (order-total {:price p :qty 3})
 ;; compiles to
-(let [price__1 p qty__2 3] (order-total--positional price__1 qty__2 0))
+(example/order-total--positional p 3 0)
+
+(order-total {:price (inc p) :qty 3})
+;; compiles to (a value that is a call is bound first, in the literal's order)
+(clojure.core/let [price__1658 (inc p) qty__1659 3] (example/order-total--positional price__1658 qty__1659 0))
 ```
 
 Release and production builds always do it. Dev and test builds keep the map call (`<name>`
@@ -801,10 +807,7 @@ Its call sites need no change: a literal-map call is a map call.
 
 ## malli versions
 
-The library code calls `malli.core/explain` and `malli.error/error-message`
-(resolved lazily by `malli-fns`), and relies on `:malli/schema` metadata being collected by
-`malli.instrument/collect!` (clj) and on the `:malli.core/invalid-input` /
-`:malli.core/invalid-output` / `:malli.core/missing-key` data. `deps.edn` declares **0.20.1**.
+`deps.edn` declares **0.20.1**.
 Tested on 0.11.0 and 0.20.1; the oldest release both test suites pass on is **0.11.0**:
 
 - clj: needs 0.9.0 (changelog: "`::m/extra-key` error retains the error value"; the suite fails

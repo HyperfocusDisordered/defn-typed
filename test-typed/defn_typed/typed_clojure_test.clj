@@ -1,7 +1,7 @@
 (ns defn-typed.typed-clojure-test
   "Typed Clojure over defn-typed code (clojure -M:typed): install! makes the checker know the
    fixture's defn-typed functions from their schemas alone, then check-form! checks the fixture
-   file form by form — the eight planted bugs are reported and involve a defn-typed function,
+   file form by form — the 14 planted bugs are reported and involve a defn-typed function,
    every other form (the defn-typed forms included) is clean."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
