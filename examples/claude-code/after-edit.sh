@@ -2,9 +2,9 @@
 # Claude Code PostToolUse hook (Edit|Write) for a Clojure project using defn-typed.
 # After an edit of a .clj/.cljc/.cljs file it runs, in order:
 #   1. reload the file's ns over nREPL                          (needs .nrepl-port, .clj/.cljc)
-#   2. malli collect! for that ns + rewrite its clj-kondo types (same)
+#   2. defn-typed.kondo/emit! the project's clj-kondo types     (in that nREPL, else the CLI)
 #   3. clj-kondo --lint <file>
-#   4. (defn-typed.core/check-ns '<ns>)                          (same as 1)
+#   4. (defn-typed.core/check-ns '<ns>)                          (same as 1; the REPL runs with -Ddefn-typed.dev=true)
 # and hands Claude ONE line, `OK <ns> · lint 0 · cases N/N`, or only the failures.
 # Needs: babashka (bb) and clj-kondo on PATH. Always exits 0: its own trouble never fails the edit.
 
@@ -60,25 +60,20 @@ port=""
 [ -f "$root/.nrepl-port" ] && [ "${file##*.}" != "cljs" ] && port=$(tr -dc '0-9' < "$root/.nrepl-port")
 
 problems=()
+types_out=".clj-kondo/imports/defn-typed/types/config.edn"
 
-# 1 + 2: reload, collect, rewrite this ns's entry in .clj-kondo/imports/metosin/malli-types-clj
+# 1 + 2: reload the ns, then emit the types of every typed fn under src/ and test/ (read from the
+# source, so .cljs files are covered too; the file is rewritten only when its text changes)
 if [ -n "$port" ]; then
   reload=$(nrepl_eval "
-(require 'defn-typed.core 'malli.instrument 'malli.clj-kondo 'clojure.edn)
+(require 'defn-typed.core 'defn-typed.kondo)
 (let [ns-sym '$ns
       root \"$root\"]
   (try
     (defn-typed.core/forget-ns! ns-sym)
     (require ns-sym :reload)
-    (malli.instrument/collect! {:ns [ns-sym]})
-    (let [f (clojure.java.io/file root \".clj-kondo\" \"imports\" \"metosin\" \"malli-types-clj\" \"config.edn\")
-          old (if (.exists f) (clojure.edn/read-string (slurp f)) {})
-          types (get-in (malli.clj-kondo/linter-config (malli.clj-kondo/collect ns-sym))
-                        [:linters :type-mismatch :namespaces ns-sym])]
-      (malli.clj-kondo/save!
-        (-> (merge {:linters {:unresolved-symbol {:exclude ['(malli.core/=>)]}}} old)
-            (update-in [:linters :type-mismatch :namespaces] #(if types (assoc % ns-sym types) (dissoc % ns-sym))))
-        :clj {:clj-kondo-dir-path [root]}))
+    (defn-typed.kondo/emit! {:src-dirs [(str root \"/src\") (str root \"/test\")]
+                             :out (str root \"/$types_out\")})
     :ok
     (catch Throwable e
       (str \"RELOAD ERROR \" (ex-message e) (some->> (ex-cause e) ex-message (str \" · \"))))))")
@@ -87,6 +82,9 @@ if [ -n "$port" ]; then
     ERROR*) problems+=("$reload"); reloaded=no ;;
     *) problems+=("$(printf '%s' "$reload" | bb -e '(print (read-string (slurp *in*)))' 2>/dev/null)"); reloaded=no ;;
   esac
+else
+  # no REPL (or a .cljs file): the same emit through the CLI, a JVM start per edit
+  (cd "$root" && clojure -M -m defn-typed.kondo --src-dir src --src-dir test --out "$types_out" 2>/dev/null)
 fi
 
 # 3: lint the file against the project's .clj-kondo (hooks + the types just written)

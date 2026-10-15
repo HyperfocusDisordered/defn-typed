@@ -3,48 +3,102 @@
 ## Unreleased
 
 - docs: tagline on README/pom/GitHub, one arity by design.
+- malli floor measured: every suite passes on malli 0.16.3 and later; the 0.3.2 README's 0.11.0
+  was wrong (the clj suite fails below 0.16.3).
+- docs: README opens with one complete example, Install with the dev/test alias, what runs where,
+  the REPL and adoption; CHANGELOG 0.3.2 lists every user-visible change, Breaking first;
+  `examples/claude-code` emits types with `defn-typed.kondo/emit!`.
+- The jar ships no clj-kondo `.cache` (0.3.2 carried one under `clj-kondo.exports/`): removed from git, ignored, and `build.clj` drops any `.cache` dir before jarring.
 
 ## 0.3.2 (2026-10-15)
 
+**Breaking**
+
+- Without `-Ddefn-typed.dev=true` (or `:dev true` in `defn-typed.edn`) a Clojure JVM runs nothing
+  at load: `check-ns` returns `[]`, `deftests!` defines 0 tests, `defn-typed.core/instrument!`
+  returns nil, and a bad real-map call goes unchecked, with no message. 0.3.1's dev alias
+  (`-Ddefn-typed.inline=false` alone) therefore checks nothing on 0.3.2. Upgrade: add
+  `-Ddefn-typed.dev=true` to the dev, test and REPL aliases. ClojureScript keeps `goog.DEBUG`.
+- Metadata on the input map (`^{:as row}`, `^{:closed true}`) is a compile error; data the body
+  needs whole is a row (`{:row :map}`).
+
+**Added**
+
+- `:dev` setting (`-Ddefn-typed.dev=true`), the Clojure analogue of `goog.DEBUG`, off by default:
+  a release JVM loading a namespace only defines the functions — no in/out cases, no `defmeta`
+  registrations, no unknown-key check on real-map calls, no instrumentation upkeep, no
+  `:stale-callers` signatures or watches, no Typed Clojure check. ClojureScript's unknown-key
+  check moves under `goog.DEBUG` (a release build has none).
+- Generic functions: type variables in a vector before the input map,
+  `(defn-typed first-of [T] {:xs [:sequential T]} -> [:maybe T] …)`; Typed Clojure gets
+  `(t/All [T] …)`, malli and clj-kondo read `:any`. Loading `defn-typed.typed-clojure` types
+  `[:tuple …]` as `t/HVec`.
+- `defnt` = `defn-typed` under a short name (same expansion, hooks and checks).
+- In/out cases run as the definition loads (clj with `:dev`, cljs dev builds): `:inout-check
+  :warn` (default) prints one line per failing case naming the differing key paths, or the
+  exception a case threw; `:error` fails the load; `:off` runs nothing. `assert-cases` (and
+  `deftests!`) carries the same line.
+- Typed Clojure check at load (clj, `:dev` on, Typed Clojure on the classpath): `:typed-check
+  :warn|:error|:off`, up to 2 s per definition. Findings lead with `input of <f>:` or
+  `output of <f>:`, and `check-form!` returns `:kind` (`:input`, `:output`, nil).
+- `:report-success`: one line per namespace whose defn-typed checks all passed.
+- `:stale-callers` (clj, `:dev` on): a redefinition with another signature names the namespaces
+  whose literal calls compiled against the old one (`:warn`, default), reloads them (`:reload`,
+  opt-in) or does nothing (`:off`); a row typed by a schema var (`:order Order`) follows a change
+  of that var.
+- `:unknown-keys :warn|:error|:off`: a real map holding keys beyond the rows, in dev builds (at
+  most 1000 reported pairs per process). `:literal-check` takes `:off`. `:literal-check`,
+  `:unknown-keys`, `:typed-check` and `:inout-check` can be set per function in its `defmeta`.
+- A row or output schema malli cannot build is a compile error with malli's message and the
+  file:line; schema names from a custom registry must be qualified.
+- Defaults inside `:sequential` / `:vector` / `:maybe` rows: optional in `<name>-props`, filled at
+  any depth; literal items are checked by index.
 - `defn-typed.kondo/emit! {:src-dirs [...] :out path}` (CLI `clojure -M -m defn-typed.kondo --src-dir
   src --out <path>`) writes the clj-kondo types of every `defn-typed` / `defnt` and every `defn`
   with `:malli/schema` under the dirs, read from the source (`.clj`, `.cljc`, `.cljs`) without
   loading it; output canonical, written only on change. `defn-typed.core/form-parts` = the macro's
-  reading of a form, public. README "Editor types (clj-kondo)" replaces the manual
-  `malli.clj-kondo/emit!` / `:node-script` recipe.
-- `:dev` setting (`-Ddefn-typed.dev=true`), the Clojure analogue of `goog.DEBUG`, off by default:
-  a release JVM loading a namespace only defines the functions — no in/out cases, no `defmeta`
-  registrations, no unknown-key check on real-map calls, no instrumentation upkeep, no
-  `:stale-callers` signatures or watches, no Typed Clojure check. Dev/test/REPL aliases add
-  `-Ddefn-typed.dev=true`. ClojureScript's unknown-key check moves under `goog.DEBUG` (a release
-  build has none).
-- `:stale-callers` defaults to `:warn` (names the stale callers); `:reload`, which reloads the
-  callers' namespaces from disk, is opt-in.
+  reading of a form, public.
+- `defn-typed.core/instrument!` (malli's `instrument!` options): a rejection's message reads
+  `defn-typed: <fn> — invalid :<key>: expected <schema>, got <value>` (malli's ex-data unchanged;
+  a `:report` of yours wins), and a redefinition re-instruments with the same options. A no-op with
+  `:dev` off.
+- Instrumentation survives a reload: a defn-typed function redefined from its file (a plain
+  `require :reload` included) stays instrumented.
 - A private defn-typed function (`^:private`, or `:private true` in its `defmeta`) is instrumented
   in dev like a public one; its `<name>--positional`, `<name>-props` (and `:malli-in-prod` vars)
   are private too.
 - A map-literal call compiled before its callee's definition (the callee `declare`d above it)
   compiles as a map call and is reported by the definition under `:literal-check`:
   `defn-typed: <file>:<line> calls <fn> before its definition — …` (`:error` fails, `:off` silent).
-- `defn-typed.core/instrument!` (malli's `instrument!` options): a rejection's message reads
-  `defn-typed: <fn> — invalid :<key>: expected <schema>, got <value>` (malli's ex-data unchanged;
-  a `:report` of yours wins), and a redefinition re-instruments with the same options. A no-op with
-  `:dev` off.
 - Every ex-info the library throws carries `:type`, one of `:defn-typed.core/invalid-form`,
   `invalid-schema`, `invalid-cases`, `setting`, `literal-call`, `forward-call`, `unknown-keys`,
   `inout-failure`, `typed-check`.
+- cljs dev builds check map-literal calls too: a `shadow-cljs watch` prints `WARNING defn-typed <file>:<line>: …` for a wrong literal call (`:refer`red, qualified, aliased or inside the defining namespace) and the call stays the map call; release builds are unchanged. `{:literal-check :off}` keeps a dev build without the call-site macro.
+- Literal calls report every key beyond the rows, of open maps too (0.2.1 flagged closed maps only).
+- clj-kondo hook: lints the `def` and both `defn`s the macro defines, so a direct `name--positional`
+  call resolves and its arity is checked; the linted `defn` carries the `defmeta`'s `:doc`
+  (clojure-lsp hover); a row the body never reads is an unused binding; the exported config keeps
+  clojure-lsp from reporting `<name>-props` and `<name>--positional` as unused public vars.
+- The pom lists the Typed Clojure deps as `provided`, so cljdoc analyzes `defn-typed.typed-clojure`.
+
+**Changed**
+
+- A literal call whose values are all data or symbols compiles to `(name--positional v …)` with no
+  `let`; a value that is a call keeps the `let` (evaluation order).
 - A leading `{:pre … :post …}` holds wherever the body lands (also a body that `recur`s to the
   function, or a table of more than 20 rows); `:post` beside such a `recur` is a compile error, as
   in `fn`.
-- clj-kondo hook: the linted `defn` carries the `defmeta`'s `:doc` (clojure-lsp hover), and a row
-  the body never reads is reported as an unused binding.
-- README: every setting (default, scope, when read, property, per-function key), `defnt`, the
-  `:dev` flag, an "Escape hatch" section, an "Errors" section.
-- Breaking (since 0.3.1): metadata on the input map (`^{:as row}`, `^{:closed true}`) is a compile
-  error; data the body needs whole is a row (`{:row :map}`).
-- cljs dev builds check map-literal calls too: a `shadow-cljs watch` prints `WARNING defn-typed <file>:<line>: …` for a wrong literal call (`:refer`red, qualified, aliased or inside the defining namespace) and the call stays the map call; release builds are unchanged. `{:literal-check :off}` keeps a dev build without the call-site macro.
 - The first build of a fresh shadow-cljs JVM recompiles every namespace that holds a defn-typed function or requires one (its cached analysis names the call-site macro); builds in a running `watch` compile only what changed.
+
+**Fixed**
+
 - In/out cases that call a function declared above and defined further down keep waiting for it when shadow-cljs recompiles a namespace over its earlier analysis.
+
+**Docs and tests**
+
+- README: every setting (default, scope, when read, property, per-function key), `defnt`, the
+  `:dev` flag, an "Escape hatch" section, an "Errors" section; "Editor types (clj-kondo)" replaces
+  the manual `malli.clj-kondo/emit!` / `:node-script` recipe.
 - In/out cases for the library's pure public functions, written from outside with `defmeta` (`test/defn_typed/api_cases.cljc`, `test-typed/defn_typed/typed_api_cases.clj`).
 
 ## 0.3.1 (2026-09-26)

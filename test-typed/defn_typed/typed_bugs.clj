@@ -1,6 +1,6 @@
 (ns defn-typed.typed-bugs
-  "Typed Clojure fixture: defn-typed functions, calls that fit their schemas (ok-calls) and eight
-   planted bugs (bug-*), each a type error the checker finds through the schemas alone. The test
+  "Typed Clojure fixture: defn-typed functions, calls that fit their schemas (ok-calls) and 14
+   planted bugs (the bug-* fns and the defn-typed forms marked `;; bug-…`), each a type error the checker finds through the schemas alone. The test
    checks this file form by form (defn-typed.typed-clojure/check-form!); it is never run."
   (:require [defn-typed.core :refer [defn-typed defnt defmeta]]))
 
