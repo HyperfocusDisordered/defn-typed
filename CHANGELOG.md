@@ -9,6 +9,14 @@
   the REPL and adoption; CHANGELOG 0.3.2 lists every user-visible change, Breaking first;
   `examples/claude-code` emits types with `defn-typed.kondo/emit!`.
 - The jar ships no clj-kondo `.cache` (0.3.2 carried one under `clj-kondo.exports/`): removed from git, ignored, and `build.clj` drops any `.cache` dir before jarring.
+- clj-kondo hook: a row whose name the body holds anywhere (a Reagent form-2 or `create-class`
+  render fn re-destructuring the props) is read; `unused binding` stays for a row named nowhere.
+- The legacy `tests` macro registers its cases in dev builds only (`:dev` in clj, `goog.DEBUG` in
+  cljs), as `defmeta` does.
+- A literal call between a `defmeta` and its own definition is reported as a forward call (its
+  declaration is the defmeta's).
+- ClojureScript reports a literal call above its callee's definition in the same file, as Clojure
+  does, under `:literal-check`; the compiled output is unchanged.
 
 ## 0.3.2 (2026-10-15)
 

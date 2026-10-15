@@ -5,7 +5,7 @@
    it expands to:
    (def <name>-props [:map …]), (defn name [m] (let [{:keys [k…]} m] (<name>--positional k…))) and
    (defn <name>--positional [k…] body…), the row keys bound as locals, so the name, the schemas, the
-   body and a direct positional call lint like any defn; a row the body never reads is kondo's
+   body and a direct positional call lint like any defn; a row whose name the body never holds is kondo's
    unused binding at its key; the defn of name carries the :doc of the defmeta above it (hover); a
    table of more than 20 rows or a body whose recur targets the function keeps the body in name, as
    the macro does. defmeta
@@ -153,6 +153,11 @@
                      row-nodes)
         ;; the same locals, unlocated: where name only passes them on
         unlocated (map #(api/token-node (api/sexpr %)) locals)
+        ;; the locals whose symbol the body holds anywhere, a nested fn's own destructuring included
+        ;; (a Reagent form-2 or create-class render fn re-destructures the props): read, so
+        ;; unused binding is left to a row the body never names
+        named (set (keep #(when (api/token-node? %) (api/sexpr %)) (tree-seq :children :children (api/list-node body))))
+        named-refs (seq (filter #(contains? named (api/sexpr %)) unlocated))
         ;; the :doc of the defmeta above (clojure-lsp hover), unless the form wrongly holds one
         hover-doc (or doc (get @defmeta-docs [filename ns (when (name-node? written-name) (api/sexpr written-name))]))]
     (when-not (name-node? written-name)
@@ -216,7 +221,19 @@
           ;; the rows name binds to pass on (unlocated: the positional parameters, located at the
           ;; keys, are the ones the body reads), or to the body that stays in name (located; two
           ;; keys binding one local, reported above, bind it once)
-          rows-of-m #(vector (api/map-node [(api/keyword-node :keys) (api/vector-node %)]) m)]
+          rows-of-m #(vector (api/map-node [(api/keyword-node :keys) (api/vector-node %)]) m)
+          ;; the named rows read once, ahead of forms: `(when-some [_ [row …]] forms…)` (a let
+          ;; around a single let would be kondo's redundant let)
+          reading #(if named-refs
+                     [(api/list-node (list* (api/token-node 'when-some)
+                                            (api/vector-node [(api/token-node '_) (api/vector-node named-refs)])
+                                            %))]
+                     %)
+          ;; the positional body: a leading condition map stays the defn's own
+          positional-body (let [[conditions & more] body]
+                            (if (and conditions (api/map-node? conditions) more)
+                              (cons conditions (reading more))
+                              (reading body)))]
       {:node (form
                (concat
                  [(api/token-node 'do)
@@ -233,10 +250,10 @@
                     (form (concat [(api/token-node 'defn) positional
                                    (api/map-node [(api/keyword-node :no-doc) (api/token-node true)])
                                    (api/vector-node locals)]
-                                  body))]
+                                  positional-body))]
                    ;; no positional fn (see positional?): the body stays in name
                    [(defn-name (api/list-node (concat [(api/token-node 'let) (api/vector-node (rows-of-m (map first (vals (group-by api/sexpr locals)))))]
-                                                      (with-conditions body))))])))})))
+                                                      (reading (with-conditions body)))))])))})))
 
 (defn defn-typed [{:keys [node] :as hook}]
   (if (nil? (second (:children node)))

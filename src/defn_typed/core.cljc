@@ -47,7 +47,7 @@
 (defn var-name [v] (symbol v))
 
 ;; the :report-success load report (defined after load-scope), fed from the checks above it
-#?(:clj (declare ^:private update-load-report! ^:private load-failed!))
+#?(:clj (declare ^:private update-load-report! ^:private load-failed! ^:private dev-only))
 
 (defn- pairs-check!
   "Throws, naming sym, unless pairs is nil (no cases) or a vector of [[args…] expected] pairs."
@@ -246,14 +246,10 @@
      "Legacy: registers v's cases, a vector of [[args…] expected] pairs, for a function of several
       positional args (defmeta's `:inout-tests` is the form for a function of one argument):
       (tests #'ns/f [[[args…] expected] …]). Replaces
-      earlier ones. In cljs the registration, and with it the var #'f and its metadata, exists
-      only under goog.DEBUG: a release build drops all of it."
+      earlier ones. The registration, and with it the var #'f, exists in dev builds only, as
+      defmeta's (dev-only): cljs under goog.DEBUG, clj with the `:dev` setting on."
      [v pairs]
-     (if (:ns &env)
-       ;; tag built outside the syntax-quote, which would resolve `boolean` to clojure.core/boolean
-       ;; and lose the hint that lets Closure drop the branch
-       `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) (register-tests! ~v ~pairs))
-       `(register-tests! ~v ~pairs))))
+     (dev-only (boolean (:ns &env)) `(register-tests! ~v ~pairs))))
 
 (defn- row-parts
   "[k row-props type] of a `[:map …]` row, written [k type] or [k row-props type]."
@@ -1646,26 +1642,26 @@
 
 #?(:clj
    (defonce ^{:private true
-              :doc "`{<fn> <line>}`: the line of a plain `declare` of a defn-typed function (not its
-      defmeta's), seen by the defmeta above its definition, until that definition takes it."}
+              :doc "`{<fn> <line>}`: the line of a `declare` of a defn-typed function written above its
+      defmeta, which the defmeta's own declare replaces, until that definition takes it."}
      forward-declared
      (atom {})))
 
 #?(:clj
-   (defn- plain-declare-line
-     "The line of the `declare` that last declared fn-name in *ns* when that declaration is a plain
-      one (var meta `:declared`, without defmeta's `::defmeta` mark), else nil: a literal call
-      compiled between it and the definition is a map call."
+   (defn- declared-line
+     "The line of the declaration of fn-name in *ns* (var meta `:declared`: a plain `declare` or a
+      defmeta's) while the var is declared and not defined, else nil: a literal call compiled
+      between it and the definition is a map call."
      [fn-name]
      (let [v (.findInternedVar ^clojure.lang.Namespace *ns* (symbol (name fn-name)))
            m (some-> v meta)]
-       (when (and (:declared m) (not (::defmeta m)))
+       (when (:declared m)
          (or (:line m) 0)))))
 
 #?(:clj
    (defonce ^{:private true
               :doc "`{<file> [<load scope> {<simple name> [<line> …]}]}`: the literal calls of the last
-      load of each file that forward-calls! read."}
+      load or compile of each file that forward-calls read."}
      file-literal-calls
      (atom {})))
 
@@ -1684,14 +1680,24 @@
      "`{<simple name> [<line> …]}`: every call `(f {…})` of one map-literal argument in the forms read
       from reader, f a symbol unqualified or qualified by ns-sym (a quoted form skipped), with the
       line of the call (the line of its top-level form when the reader gave the call none). Reads
-      in ns-sym (`::k` and aliases resolve), without `#=`; stops at the first form it cannot read."
-     [^java.io.Reader reader ns-sym]
+      without `#=`, the `:clj` branches in ns-sym (`::k` and aliases resolve); cljs? reads the
+      `:cljs` branches, `::k` and any alias resolving to a placeholder (the namespace has no clj
+      counterpart) and a tagged literal (`#js`) as its form; stops at the first form it cannot read."
+     [{:keys [^java.io.Reader reader ns-sym cljs?]}]
      (let [in (clojure.lang.LineNumberingPushbackReader. reader)
            eof (Object.)
            own (str ns-sym)]
-       (binding [*ns* (the-ns ns-sym) *read-eval* false]
+       (binding [*ns* (if cljs? *ns* (the-ns ns-sym))
+                 *read-eval* false
+                 *reader-resolver* (when cljs?
+                                     (reify clojure.lang.LispReader$Resolver
+                                       (currentNS [_] ns-sym)
+                                       (resolveClass [_ sym] sym)
+                                       (resolveAlias [_ sym] sym)
+                                       (resolveVar [_ sym] sym)))
+                 *default-data-reader-fn* (if cljs? (fn [_ form] form) *default-data-reader-fn*)]
          (loop [found {}]
-           (let [form (try (read {:eof eof :read-cond :allow :features #{:clj}} in) (catch Exception _ eof))]
+           (let [form (try (read {:eof eof :read-cond :allow :features (if cljs? #{:cljs} #{:clj})} in) (catch Exception _ eof))]
              (if (identical? eof form)
                found
                (recur (reduce (fn [found call]
@@ -1707,16 +1713,16 @@
 
 #?(:clj
    (defn- forward-calls
-     "The lines of the map-literal calls of fn-name in this load's file from line `from` up to its
-      definition at line `to` (literal-calls, read once per file load), sorted."
-     [{:keys [fn-name from to]}]
-     (let [file *file*
-           scope (load-scope false)
+     "The lines of the map-literal calls of fn-name in file (the one being loaded or compiled, of
+      namespace ns-sym) from line `from` up to its definition at line `to` (literal-calls, read once
+      per file load or compile), sorted."
+     [{:keys [fn-name from to file ns-sym cljs?]}]
+     (let [scope (load-scope cljs?)
            [cached-scope calls] (get @file-literal-calls file)
            calls (if (and scope (identical? scope cached-scope))
                    calls
                    (let [read (with-open [r (or (source-reader file) (java.io.StringReader. ""))]
-                                (literal-calls r (ns-name *ns*)))]
+                                (literal-calls {:reader r :ns-sym ns-sym :cljs? cljs?}))]
                      (swap! file-literal-calls assoc file [scope read])
                      read))]
        (sort (filter #(and (<= from %) (< % to)) (get calls (name fn-name)))))))
@@ -1726,14 +1732,14 @@
      "Reports each literal call of the function q compiled before its definition (lines, from
       forward-calls) as the `:literal-check` mode says: `:warn` prints `defn-typed: <file>:<line>
       calls <q> before its definition — the call compiles as a map, not positionally; move the
-      definition above the call` per call, `:error` throws an ex-info of those lines, `:off`
-      nothing."
-     [{:keys [q lines mode]}]
+      definition above the call` per call (file = where the calls are), `:error` throws an ex-info
+      of those lines, `:off` nothing."
+     [{:keys [q lines mode file cljs?]}]
      (when (and (seq lines) (not= :off mode))
        (let [texts (for [line lines]
-                     (str "defn-typed: " (project-path *file*) ":" line " calls " q " before its definition"
+                     (str "defn-typed: " (project-path file) ":" line " calls " q " before its definition"
                           " — the call compiles as a map, not positionally; move the definition above the call"))]
-         (load-failed! (ns-name *ns*))
+         (when-not cljs? (load-failed! (ns-name *ns*)))
          (if (= :error mode)
            (throw (ex-info (clojure.string/join "\n" texts) {:type ::forward-call :fn q :lines (vec lines)}))
            (doseq [text texts] (print-err! text)))))))
@@ -1875,13 +1881,20 @@
                                                                    :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
                                                                    :file *file* :line (deref clojure.lang.Compiler/LINE)})))))]
           (swap! pending-meta dissoc q)
-          ;; clj: literal calls compiled after a plain `declare` and before this definition are map
-          ;; calls (the var had no :inline yet): reported under :literal-check
-          (when-not cljs?
-            (when-let [from (or (get (first (swap-vals! forward-declared dissoc q)) q)
-                                (plain-declare-line fn-name))]
-              (report-forward-calls! {:q q :mode (or (:literal-check spec) (setting :literal-check))
-                                      :lines (forward-calls {:fn-name fn-name :from from :to (or (:line (meta &form)) Long/MAX_VALUE)})})))
+          ;; literal calls compiled before this definition are map calls, reported under
+          ;; :literal-check: clj from a `declare` (a plain one, or the defmeta's; the var had no
+          ;; :inline yet), cljs from the top of the file (the call-site expander is installed below)
+          (let [from (if cljs?
+                       0
+                       (or (get (first (swap-vals! forward-declared dissoc q)) q)
+                           (declared-line fn-name)))
+                mode (or (:literal-check spec) (setting :literal-check))
+                file (if cljs? (some-> (resolve 'cljs.analyzer/*cljs-file*) deref) *file*)]
+            (when (and from (not= :off mode))
+              (report-forward-calls! {:q q :mode mode :file file :cljs? cljs?
+                                      :lines (forward-calls {:fn-name fn-name :from from :to (or (:line (meta &form)) Long/MAX_VALUE)
+                                                             :file file :ns-sym (if cljs? (-> &env :ns :name) (ns-name *ns*))
+                                                             :cljs? cljs?})})))
           ;; no cases above: a defmeta below, in this same load, runs them (defmeta)
           (when-not *typed-checking*
             (if (contains? defmeta-above :inout-tests)
@@ -2019,11 +2032,11 @@
              m (vary-meta m assoc ::line (:line (meta &form)))]
          ;; below the definition its cases are run here, so they stay out of the next definition's
          (swap! pending-meta assoc q (cond-> m below? (dissoc :inout-tests)))
-         ;; clj: a plain `declare` above, which this defmeta's declare replaces (report-forward-calls!)
-         (when-let [line (and (not cljs?) (plain-declare-line fn-name))]
+         ;; clj: a `declare` above, which this defmeta's declare replaces (report-forward-calls!)
+         (when-let [line (and (not cljs?) (declared-line fn-name))]
            (swap! forward-declared assoc q line))
          `(do
-            (declare ~(cond-> fn-name (not cljs?) (vary-meta assoc ::defmeta true)))
+            (declare ~fn-name)
             ~@(when (seq other)
                 (some-> (dev `(register-meta! (var ~fn-name) ~other)) plumbing vector))
             ~@(when (contains? m :inout-tests)
