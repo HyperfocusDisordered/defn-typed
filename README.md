@@ -6,33 +6,113 @@
 
 Typed defn for Clojure and ClojureScript: one signature gives Typed Clojure static checks, compile-time literal-call checks, clj-kondo editor types, malli runtime contracts and example tests — and a call costs a positional call.
 
+<!-- readme-test -->
+```clojure
+(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
+
+(defmeta order-total
+  {:doc "Order total: price × qty, minus a percent discount."
+   :inout-tests [[{:price 100}                      100]
+                 [{:price 100 :qty 3}               300]
+                 [{:price 100 :qty 3 :discount 10}  270]]})
+
+(defn-typed order-total {
+  :price    [:int {:min 1}]
+  :qty      [:int {:min 1 :default 1}]
+  :discount [:int {:min 0 :max 100 :default 0}]
+} -> :int
+  (quot (* price qty (- 100 discount)) 100)
+)
+```
+
+`defmeta` holds the doc and the `[in out]` example pairs; `defn-typed` takes one map of rows
+`{key schema}` ([malli](https://github.com/metosin/malli) schemas), the output schema after `->`,
+then the body, where every row key is a local with its default filled. A call names its arguments:
+
+```clojure
+(order-total {:price 100 :qty 3})   ; => 300; with :inline on it compiles to (example/order-total--positional 100 3 0)
+```
+
+What each layer reports, for wrong calls written in `shop/cart.clj`:
+
+| Layer | Wrong call or case | Report |
+|---|---|---|
+| clj-kondo, as you type | `(order-total {:price "100"})` | `error: Expected: integer, received: string.` |
+| compile | `(order-total {:price 100 :qty 0})` | `WARNING defn-typed shop/cart.clj:4: (order-total …) :qty 0 — should be at least 1` |
+| dev/test run | `(order-total {:price 100 :qty n})`, `n` = 0 | throws `defn-typed: example/order-total — invalid :qty: expected [:int {:min 1, :default 1}], got 0` |
+| dev load | a case `[{:price 100 :qty 3 :discount 10} 280]` | `WARNING example.clj:3 example/order-total in/out case 2: expected 280, got 270 — input {:price 100, :qty 3, :discount 10}` |
+| Typed Clojure (optional) | a body that returns a string under `-> :int` | `output of order-total: Type mismatch: …` |
+
+The compile row judges keys always; values and ranges where malli is loaded when the call
+compiles (dev/test/REPL loaders, every ClojureScript build); the loader is in [Install](#install).
+
+## Install
+
+```clojure
+;; deps.edn, from Clojars
+{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.3.2"}}
+ :aliases {:dev  {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"]}
+           :test {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"]}}}
+
+;; deps.edn, from git
+{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.3.2" :git/sha "a01b52f"}}}
+
+;; shadow-cljs.edn
+{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.3.2"]]}
+```
+
+Without `-Ddefn-typed.dev=true` nothing is checked at run time and no example runs, silently:
+`instrument!` returns nil, `check-ns` returns `[]`. That property turns on `:dev`, the Clojure
+analogue of `goog.DEBUG`; `-Ddefn-typed.inline=false` keeps every call the map call, so
+instrumentation sees it. Both are settings: a `defn-typed.edn` file at the project root holds
+them for every build, and a `-Ddefn-typed.<key>` property wins over the file (see
+[Configuration](#configuration)). A loader namespace, on the dev/test classpath only, requires the
+app and runs `(malli.instrument/collect! {:ns …})` + `(defn-typed.core/instrument!)` (see
+[Checks run in dev/test only](#checks-run-in-devtest-only)). `metosin/malli` comes along as a
+dependency (see [malli versions](#malli-versions)).
+
+## What runs where
+
+- **Compile**, every build: literal calls are checked (keys always; values and ranges where malli
+  is loaded), and with `:inline` on (Clojure by default, ClojureScript release builds) a fitting
+  literal call compiles to the positional call.
+- **Dev JVM (`:dev`) or ClojureScript dev build (`goog.DEBUG`)**: malli instrumentation of every
+  call once the loader ran, the `defmeta` cases as each definition loads, unknown keys of real
+  maps, and Typed Clojure when it is on the classpath.
+- **Release**, at run time: nothing, except functions you mark `:malli-in-prod` (see
+  [malli in production](#malli-in-production)). The schemas stay as data (`:malli/schema`
+  metadata, `<name>-props`); a ClojureScript release bundle has no malli code.
+
+clj-kondo checks keys and types in the editor from emitted types (see [Static checking](#static-checking)).
+
+## REPL
+
+The dev and test aliases set `-Ddefn-typed.inline=false`: there every call is the map call
+through the var, so a plain map call always works, a redefinition reaches every caller, and no
+caller goes stale. Calls compile positionally only with `:inline` on: release builds and servers,
+which have no REPL. The literal check is a warning by default, not a gate: a failing literal
+compiles to the map call. Where `:inline` stays on in a `:dev` JVM, a signature change prints
+which namespaces to reload (`:stale-callers :warn`); a call typed at the REPL is never recorded.
+A changed schema var that a row names (`:order Order`) prints that the function and its callers
+use the old value.
+
+## Adopting in an existing codebase
+
+Convert the functions that already take one options map first, one namespace at a time. Plain
+`defn` stays beside them: multi-arity, variadic and positional functions (see [Escape
+hatch](#escape-hatch)). Call sites do not change: a literal-map call is a map call, and a map
+built elsewhere is passed as before.
+
 ## Why
 
 Most languages give you one familiar shape for a typed function: name, inputs with their types,
 output type, body.
 
-TypeScript
-
-```typescript
-function orderTotal(price: number, qty: number = 1, discount: number = 0): number
 ```
-
-Kotlin
-
-```kotlin
-fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int
-```
-
-Swift
-
-```swift
-func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int
-```
-
-Python
-
-```python
-def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
+TypeScript  function orderTotal(price: number, qty: number = 1, discount: number = 0): number
+Kotlin      fun orderTotal(price: Int, qty: Int = 1, discount: Int = 0): Int
+Swift       func orderTotal(price: Int, qty: Int = 1, discount: Int = 0) -> Int
+Python      def order_total(price: int, qty: int = 1, discount: int = 0) -> int:
 ```
 
 Clojure has no such form. «Is Clojure typed?» has no short answer: yes, sort of, but the popular
@@ -44,31 +124,14 @@ shape, and builds everything else from the one signature:
   signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
 - **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
   during the build — keys always; values and ranges where malli is loaded when the call compiles (dev/test/REPL loaders, every ClojureScript build) (see Compile-time literal checks);
-- **runtime contracts**: every call is checked in the REPL and in tests;
+- **runtime contracts**: every call is checked in the REPL and in tests (with `:dev`, see What runs where);
 - **example tests**: the `[in out]` pairs above the function run as tests;
 - **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
   as a plain `defn` (see Zero-cost calls).
 
-The schemas are [malli](https://github.com/metosin/malli) schemas: malli does the validation, the
-error messages and the instrumentation. What the function does, then example inputs and outputs,
-then the typed function: plain data, in that order, nothing else.
-
-```clojure
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-```
-
-Same shape, and the signature also says what none of the four can: `discount` is 0 to 100. The
-range is checked at runtime, on every call, only while malli instrumentation is on: in the REPL
-after `(malli.dev/start!)`, in tests after `(defn-typed.core/instrument!)`. Without instrumentation
-nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
-functions in, see malli in production). Literal calls such
-as `(order-total {:discount 150})` are also checked at compile time — keys always; values and ranges where malli is loaded when the call compiles (dev/test/REPL loaders, every ClojureScript build); see Compile-time
-literal checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
-see Static checking.
+`order-total` at the top has the same shape, and its signature also says what none of the four
+can: `discount` is 0 to 100. What the function does, then example inputs and outputs, then the
+typed function: plain data, in that order, nothing else.
 
 ## Forms
 
@@ -76,28 +139,11 @@ see Static checking.
 - `defn-typed` (the function): a map input `{key schema …}`, an `->` output schema, then the body.
   Every row key is a local in the body, defaults already filled.
 
-The schemas are [malli](https://github.com/metosin/malli) schemas, stored as plain `:malli/schema`
-var metadata. They check calls only where a dev/test/REPL loader runs malli's instrumentation;
-a production build carries them as data and never loads malli (unless functions opt in, see
-[malli in production](#malli-in-production)). The example pairs run as tests
-(`check-var`, `check-ns`, `deftests!`).
+The schemas are malli schemas, stored as plain `:malli/schema` var metadata: malli does the
+validation, the error messages and the instrumentation (where they run: [What runs
+where](#what-runs-where)). The example pairs run as tests (`check-var`, `check-ns`, `deftests!`).
 
 Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
-
-## Install
-
-```clojure
-;; deps.edn, from Clojars
-{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.3.2"}}}
-
-;; deps.edn, from git
-{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.3.2" :git/sha "a01b52f"}}}
-
-;; shadow-cljs.edn
-{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.3.2"]]}
-```
-
-`metosin/malli` comes along as a dependency (see [malli versions](#malli-versions)).
 
 ## Static checking
 
@@ -109,7 +155,7 @@ clj-kondo reports wrong calls of `defn-typed` functions once their types are in 
 mkdir -p .clj-kondo   # clj-kondo copies configs only into an existing config dir
 clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
 
-# 2. the types (again after a signature change; see Editor types below)
+# 2. the types: one command for any editor and CI (again after a signature change; see Editor types)
 clojure -M -m defn-typed.kondo --src-dir src --out .clj-kondo/imports/defn-typed/types/config.edn
 
 # 3. lint as usual
@@ -129,17 +175,9 @@ With the hooks alone clj-kondo checks the form's shape and the body, not the typ
 under the dirs: each `defn-typed` / `defnt` (its input read by the macro's own `form-parts`, a
 defaulted row optional) and each plain `defn` carrying `:malli/schema`. It loads no namespace, so
 `.clj`, `.cljc` and `.cljs` files are covered alike (a `.cljs` file through its `:cljs` reader
-branches), and it runs in any JVM with the library on the classpath:
-
-```clojure
-(defn-typed.kondo/emit! {:src-dirs ["src" "test"] :out ".clj-kondo/imports/defn-typed/types/config.edn"})
-;; => {:written? true :fns 42 :out ".clj-kondo/imports/defn-typed/types/config.edn"}
-```
-
-```sh
-clojure -M -m defn-typed.kondo --src-dir src --src-dir test --out .clj-kondo/imports/defn-typed/types/config.edn
-# stderr: OK 42 fns → .clj-kondo/imports/defn-typed/types/config.edn   (stdout stays empty)
-```
+branches). The CLI of step 2 runs it: `--src-dir` repeats (`--src-dir src --src-dir test`), the
+line `OK 42 fns → .clj-kondo/imports/defn-typed/types/config.edn` goes to stderr, stdout stays
+empty.
 
 clj-kondo loads a config under `.clj-kondo/imports/` with no further setting; another path needs
 `:config-paths`. In a schema, a symbol naming a top-level `def` of the same namespace (or of the
@@ -148,8 +186,10 @@ output is canonical (every map sorted by key) and the file is written only when 
 so the same sources leave it, and its git diff, alone; `:written? false` says so. malli's global
 function-schema registry is not touched, so a REPL's own registrations stay as they are.
 
-An after-edit hook keeps the types current by calling it in the project's warm REPL (nREPL) before
-it lints the edited file, and falling back to the CLI when no REPL runs:
+Optional speed-up: in a running REPL, `(defn-typed.kondo/emit! {:src-dirs ["src" "test"] :out
+".clj-kondo/imports/defn-typed/types/config.edn"})` writes the same file without a JVM start and
+returns `{:written? true :fns 42 :out …}`. An after-edit hook can call it there before it lints
+the edited file, and fall back to the CLI when no REPL runs:
 
 ```sh
 # after-edit hook, $file under src/ edited; nrepl-eval = your nREPL client (fails when no REPL runs)
@@ -158,6 +198,9 @@ nrepl-eval "(do (require 'defn-typed.kondo) $form)" \
   || clojure -M -m defn-typed.kondo --src-dir src --out .clj-kondo/imports/defn-typed/types/config.edn
 clj-kondo --lint "$file"
 ```
+
+An example after-edit hook that reloads, emits the types and lints:
+[examples/claude-code](examples/claude-code).
 
 What is checked where:
 
@@ -175,11 +218,8 @@ What is checked where:
   map as open.
 - **Compile** (the macro, at every map-literal call; cljs: every build, see
   [Compile-time literal checks](#compile-time-literal-checks)): unknown keys, missing keys, and values that are data against their row schema, ranges included — keys always; values and ranges where malli is loaded when the call compiles (dev/test/REPL loaders, every ClojureScript build).
-- **Release**: nothing, except the functions you opt in (see
-  [malli in production](#malli-in-production)). The types live in `.clj-kondo`, instrumentation
-  only in dev/test.
-
-An after-edit hook that reloads, emits the types and lints: [examples/claude-code](examples/claude-code).
+- **Release**, at run time: nothing beyond the `:malli-in-prod` functions (see
+  [What runs where](#what-runs-where)).
 
 ## Typed Clojure
 
@@ -246,28 +286,8 @@ runs away cannot be stopped, only abandoned (restart the JVM).
 
 ## Example
 
-Read top to bottom: the task, then its inputs and outputs, then the typed function.
-
-<!-- readme-test -->
-```clojure
-(ns example (:require [defn-typed.core :refer [defn-typed defmeta]]))
-
-(defmeta order-total
-  {:doc "Order total: price × qty, minus a percent discount."
-   :inout-tests [[{:price 100}                      100]
-                 [{:price 100 :qty 3}               300]
-                 [{:price 100 :qty 3 :discount 10}  270]]})
-
-(defn-typed order-total {
-  :price    [:int {:min 1}]
-  :qty      [:int {:min 1 :default 1}]
-  :discount [:int {:min 0 :max 100 :default 0}]
-} -> :int
-  (quot (* price qty (- 100 discount)) 100)
-)
-```
-
-The smallest one, a single input:
+More examples, read top to bottom: the task, then its inputs and outputs, then the typed
+function (`order-total` is at the top). The smallest one, a single input:
 
 <!-- readme-test -->
 ```clojure
@@ -309,7 +329,7 @@ A real one, from the app this library was extracted from:
 )
 ```
 
-The README's four marked blocks (these three and `first-of` under Generic functions) run as a test
+The README's four marked blocks (`order-total` at the top, these two, and `first-of` under Generic functions) run as a test
 (`test/defn_typed/readme_test.clj` evaluates them verbatim and asserts there are four).
 
 ## Syntax
@@ -459,7 +479,7 @@ reports it under `:literal-check`:
 defn-typed: src/shop/db.clj:812 calls shop.db/lot-vertical before its definition — the call compiles as a map, not positionally; move the definition above the call
 ```
 
-The switch:
+The switch, the `:inline` setting:
 
 - **Clojure**: on by default. Every direct call is covered, `:refer`red ones included (the
   function's `:inline`). The setting `:inline false`, in effect while the calling code compiles,
@@ -471,12 +491,7 @@ The switch:
   stays the map call and is checked (see [Compile-time literal checks](#compile-time-literal-checks)).
   Calls through an alias (`c/order-total`), a `:refer`red name, a qualified name, or inside the
   defining namespace are covered. In the release JS such a call builds no map:
-  `(c/order-total {:price p :qty 3})` came out as `quot(300 * p, 100)`. A `.cljs` namespace holding
-  defn-typed functions, and each namespace that requires one, is recompiled by the first build of a
-  fresh shadow-cljs JVM, dev or release (shadow-cljs prints `Failed reading cache for <ns>: failed
-  to require macro-ns …`): its cached analysis names a macro that exists only while the build runs.
-  Builds in a running `watch` compile only what changed. `{:literal-check :off}` in `defn-typed.edn`
-  keeps a dev build free of that recompile.
+  `(c/order-total {:price p :qty 3})` came out as `quot(300 * p, 100)`.
 
 A rewritten call skips `<name>`, so instrumentation does not see it: dev, REPL and test builds keep
 the switch off, where every call goes through the var. With it on, a caller compiled earlier still
@@ -515,6 +530,14 @@ With `{:literal-check :error}` in `defn-typed.edn` the mismatch is a compile err
 ClojureScript: literal checks run in every build, dev watch included, and print the same
 `WARNING defn-typed <file>:<line>: …` line; the rewrite to the positional call runs in release
 (`:advanced`) builds only. In dev, clj-kondo and malli instrumentation cover the same calls too.
+
+The dev check costs one recompile per fresh shadow-cljs JVM: its first build, dev or release,
+recompiles each `.cljs` namespace holding defn-typed functions and each namespace that requires
+one (shadow-cljs prints `Failed reading cache for <ns>: failed to require macro-ns …`), because
+their cached analysis names a macro that exists only while the build runs. Measured on this
+library's test build: about 0.55 s for the library's namespace, 5 to 9 ms per requiring namespace.
+Builds in a running `watch` compile only what changed. `{:literal-check :off}` in `defn-typed.edn`
+keeps a dev build free of the check and of that recompile.
 
 Not checked here: a value that is not data, a row schema that cannot be evaluated at compile time
 (in cljs, a schema with a symbol in it), a map that is not a literal. The value check runs only
@@ -626,12 +649,8 @@ defn-typed shop/cart.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
 
 Dev and test turn the dev behaviour on and keep the map call, so instrumentation checks every
-call; their aliases set the properties (the file is shared with production builds):
-
-```clojure
-:aliases {:test  {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"] …}
-          :nrepl {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"] …}}
-```
+call; their aliases set the properties (see [Install](#install)), since the file is shared with
+production builds.
 
 ## Checks run in dev/test only
 
@@ -759,6 +778,9 @@ reporting `name-props` and `name--positional` as unused public vars (checked wit
 
 ## Running the examples
 
+They need `:dev` on (`-Ddefn-typed.dev=true`, see [Install](#install)); with it off no case is
+registered, so `check-ns` returns `[]` and `deftests!` defines no test.
+
 - `(check-var #'f)` → `{:var sym :cases n :failures [{:i :in :expected :actual}]}`; a throwing
   case → `:actual [:thrown msg]`.
 - `(check-ns 'ns)` → `check-var` over every function of `ns` that has examples.
@@ -820,7 +842,7 @@ A project that declares its own malli gets that version (tools.deps picks the to
 ```sh
 clojure -M:test                                     # clj, switch on (the default)
 clojure -J-Ddefn-typed.inline=false -M:test         # clj, switch off
-clojure -M:cljs compile test && node out/node-tests.js   # cljs (shadow-cljs :node-test)
+clojure -M:cljs compile test                        # cljs (shadow-cljs :node-test, runs the tests itself)
 clojure -M:cljs release inline && node out/inline-tests.js   # cljs release, switch on
 clojure -M:typed                                    # Typed Clojure bridge (test-typed/)
 clj-kondo --lint src test                            # uses the exported hooks
