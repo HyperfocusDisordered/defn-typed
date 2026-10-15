@@ -1357,10 +1357,13 @@
       namespace of the same name (where the analyzer looks up `alias/name` and `ns/name`) and
       recorded as the ns's own `:use-macros` (where it looks up a bare `name` in that ns) and among
       its analyzed `:macros` (so a namespace that `:refer`s name gets it into its `:use-macros`,
-      shadow-cljs infer-macro-use). Value position keeps resolving the fn. Called in a release (`:advanced`) build only: a cached
-      analysis holding that `:use-macros` entry needs the clj macro ns, which a fresh JVM lacks, so
-      shadow-cljs recompiles such a ns on every build; a dev build keeps its cache and plain calls. A clj var of that name that is not such an expander (a
-      .cljc loaded on the JVM) stays untouched: that fn then has no expander."
+      shadow-cljs infer-macro-use). Value position keeps resolving the fn. Installed in every
+      build whose literal check is not `:off` (a release build always: it rewrites the calls): a
+      cached analysis holding that `:use-macros` entry needs the clj macro ns, which a fresh JVM
+      lacks, so the first build of a fresh shadow-cljs JVM recompiles the namespaces that define
+      or require a defn-typed namespace; builds in the running JVM recompile only what changed. A
+      clj var of that name that is not such an expander (a .cljc loaded on the JVM) stays
+      untouched: that fn then has no expander."
      [env fn-name spec]
      (let [ns-sym (-> env :ns :name)
            macro-ns (create-ns ns-sym)
@@ -1368,10 +1371,10 @@
        (when (or (nil? existing) (::expander (meta existing)))
          (let [cljs-file (resolve 'cljs.analyzer/*cljs-file*)
                v (intern macro-ns (with-meta fn-name {::expander true})
-                         ;; decided per compile: a JVM that ran a release keeps this macro, and its
-                         ;; later dev compiles get the plain call, without checks
+                         ;; decided per compile: a dev compile checks the literal and keeps the
+                         ;; plain call, a release compile (inline-on?) also rewrites a fitting one
                          (fn [form env & args]
-                           (if (and (= 1 (count args)) (inline-on? true))
+                           (if (= 1 (count args))
                              (expand-call {:spec spec :arg (first args) :fallback form :cljs? true
                                            :file (some-> cljs-file deref)
                                            :line (or (:line (meta form)) (:line env))})
@@ -1530,13 +1533,19 @@
 
 #?(:clj
    (defn- pending-vars
-     "cljs: the vars of the namespace being compiled that are declared but not defined yet (their
-      analyzed def is `:declared`), as `(var …)` forms; clj: none."
+     "cljs: the vars of the namespace being compiled that are declared but not defined yet, as
+      `(var …)` forms: a def analyzed as `:declared`, and any function of the namespace's analysis
+      that this file's compile has not reached (`cljs.analyzer/*file-defs*`). The second kind exists
+      when shadow-cljs recompiles a namespace with the analysis of its previous compile still in
+      place (the cache of a namespace holding a call-site expander is restored, then dropped), where
+      a `declare` of an already analyzed var changes nothing. clj: none."
      [env]
      (when (:ns env)
        (let [ns-sym (-> env :ns :name)
-             defs (get-in (some-> (resolve 'cljs.env/*compiler*) deref deref) [:cljs.analyzer/namespaces ns-sym :defs])]
-         (vec (for [[sym {:keys [declared]}] (sort-by key defs) :when declared]
+             defs (get-in (some-> (resolve 'cljs.env/*compiler*) deref deref) [:cljs.analyzer/namespaces ns-sym :defs])
+             reached (some-> (resolve 'cljs.analyzer/*file-defs*) deref deref)]
+         (vec (for [[sym {:keys [declared fn-var macro]}] (sort-by key defs)
+                    :when (or declared (and reached fn-var (not macro) (not (contains? reached sym))))]
                 `(var ~(symbol (str ns-sym) (str sym)))))))))
 
 #?(:clj
@@ -1707,8 +1716,10 @@
             (if (contains? defmeta-above :inout-tests)
               (swap! awaiting-meta dissoc q)
               (swap! awaiting-meta assoc q (load-scope cljs?))))
-          ;; cljs: a release build only (see install-cljs-expander!); a dev build keeps plain calls
-          (when (and cljs? (inline-on? true)) (install-cljs-expander! &env fn-name spec))
+          ;; cljs: the call-site expander (see install-cljs-expander!); a dev build with the literal
+          ;; check off has nothing for it to do
+          (when (and cljs? (or (inline-on? true) (not= :off (or (:literal-check spec) (setting :literal-check)))))
+            (install-cljs-expander! &env fn-name spec))
           (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@body))
                 body-defn (when positional? `(defn ~positional {:no-doc true} ~locals ~@body))
                 ;; clj: after the defn, callers compiled against another signature are stale (cljs:

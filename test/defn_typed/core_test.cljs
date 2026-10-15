@@ -5,7 +5,8 @@
             [defn-typed.core :as core :refer [defn-typed defnt defmeta]]
             [malli.core :as m]
             [malli.error :as me]
-            [malli.instrument :as mi]))
+            [malli.instrument :as mi]
+            [defn-typed.api-cases]))
 
 (defn- summary [results]
   {:cases (reduce + 0 (map :cases results))
@@ -16,6 +17,14 @@
     (testing "defn-typed.core"
       (is (pos? cases))
       (is (= [] failures)))))
+
+(deftest api-cases
+  (testing "the cases written from outside for the pure public functions: one assertion per function"
+    (let [results (core/check-ns 'defn-typed.api-cases)]
+      (is (pos? (count results)))
+      (doseq [{:keys [var cases failures]} results]
+        (is (pos? cases) (str var))
+        (is (= [] failures) (str var))))))
 
 (defmeta padded
   {:doc "a + b, b defaulting to 2."

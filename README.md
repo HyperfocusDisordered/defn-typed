@@ -169,7 +169,7 @@ What is checked where:
   (`{:price 0}` against `[:int {:min 1}]`) and the output. Unknown keys: literal calls flag them,
   real maps are checked by malli as open maps. clj-kondo's types carry no ranges and read every
   map as open.
-- **Compile** (the macro, at every map-literal call; cljs: release builds, see
+- **Compile** (the macro, at every map-literal call; cljs: every build, see
   [Compile-time literal checks](#compile-time-literal-checks)): unknown keys, missing keys, and values that are data against their row schema, ranges included.
 - **Release**: nothing, except the functions you opt in (see
   [malli in production](#malli-in-production)). The types live in `.clj-kondo`, instrumentation
@@ -443,13 +443,16 @@ The switch:
   A literal call compiled to the positional call while `malli.instrument` is loaded prints one
   stderr line per JVM: `defn-typed: literal calls compile to positional calls, instrumentation will
   not check them — set -Ddefn-typed.inline=false in your dev/test alias`.
-- **ClojureScript**: on in a release build (`:optimizations :advanced`), off in dev. Calls through
-  an alias (`c/order-total`), a `:refer`red name, a qualified name, or inside the defining namespace
-  are covered. In the release JS such a call builds no map: `(c/order-total {:price p :qty 3})` came
-  out as `quot(300 * p, 100)`. A `.cljs` namespace holding defn-typed functions, and each namespace
-  that `:refer`s one, is recompiled on every release build (shadow-cljs prints `Failed reading cache
-  for <ns>: failed to require macro-ns …`): its cached analysis names a macro that exists only while
-  the build runs.
+- **ClojureScript**: on in a release build (`:optimizations :advanced`), off in dev, where the call
+  stays the map call and is checked (see [Compile-time literal checks](#compile-time-literal-checks)).
+  Calls through an alias (`c/order-total`), a `:refer`red name, a qualified name, or inside the
+  defining namespace are covered. In the release JS such a call builds no map:
+  `(c/order-total {:price p :qty 3})` came out as `quot(300 * p, 100)`. A `.cljs` namespace holding
+  defn-typed functions, and each namespace that requires one, is recompiled by the first build of a
+  fresh shadow-cljs JVM, dev or release (shadow-cljs prints `Failed reading cache for <ns>: failed
+  to require macro-ns …`): its cached analysis names a macro that exists only while the build runs.
+  Builds in a running `watch` compile only what changed. `{:literal-check :off}` in `defn-typed.edn`
+  keeps a dev build free of that recompile.
 
 A rewritten call skips `<name>`, so instrumentation does not see it: dev, REPL and test builds keep
 the switch off, where every call goes through the var. With it on, a caller compiled earlier still
@@ -478,8 +481,9 @@ WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at le
 With `{:literal-check :error}` in `defn-typed.edn` the mismatch is a compile error instead (see
 [Configuration](#configuration)).
 
-ClojureScript: literal checks and the rewrite run in release (`:advanced`) builds; in dev,
-clj-kondo and malli instrumentation cover the same calls.
+ClojureScript: literal checks run in every build, dev watch included, and print the same
+`WARNING defn-typed <file>:<line>: …` line; the rewrite to the positional call runs in release
+(`:advanced`) builds only. In dev, clj-kondo and malli instrumentation cover the same calls too.
 
 Not checked here: a value that is not data, a row schema that cannot be evaluated at compile time
 (in cljs, a schema with a symbol in it), a map that is not a literal. The value check runs only
@@ -504,7 +508,8 @@ first macroexpansion; no file = the defaults.
 - `:literal-check`: a literal call that fails its compile-time check (see Compile-time literal
   checks) prints its `WARNING defn-typed …` line and compiles to the map call (`:warn`), or is a
   compile error with the same text (`:error`): the namespace does not load, the build fails.
-  Clojure and ClojureScript alike.
+  Clojure and ClojureScript alike; `:off` in a ClojureScript dev build also skips the call-site
+  macro (see Zero-cost calls).
 - `:inline`: whether a fitting literal call compiles to the positional call in Clojure (see
   Zero-cost calls). ClojureScript decides by the build: on in release, off in dev.
 - `:report-success`: after a file loads (`require`, `load-file`, an editor's load-file), one line

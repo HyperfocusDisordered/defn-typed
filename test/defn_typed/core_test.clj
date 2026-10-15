@@ -12,6 +12,7 @@
             [malli.instrument :as mi]))
 
 (core/deftests! 'defn-typed.core)
+(core/deftests! 'defn-typed.api-cases)
 
 (defmeta padded
   {:doc "a + b, b defaulting to 2."
@@ -227,6 +228,17 @@
   (filterv #(and (symbol? %) (some-> (namespace %) (str/starts-with? "malli")))
            (tree-seq coll? seq form)))
 
+(defn- with-cljs-compiler
+  "Calls (f compiler) with cljs.env/*compiler* holding a fake compiler atom whose :optimizations is
+   optimizations (what the cljs analyzer binds around a compile), then removes cljs.env and the
+   namespaces ns-syms."
+  [optimizations ns-syms f]
+  (let [compiler (atom {:options {:optimizations optimizations}})]
+    (intern (create-ns 'cljs.env) '*compiler* compiler)
+    (try (f compiler)
+         (finally (remove-ns 'cljs.env)
+                  (run! remove-ns ns-syms)))))
+
 (deftest release-form
   (testing "defn-typed expands to (def <name>-props …) + (declare <name>) + the positional defn holding the body + (instrumented-before! '<name>) + a plain clojure.core/defn whose :malli/schema is attr-map data + (keep-instrumented! #'<name>) + (signature! #'<name> …): no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int} -> :int a))]
@@ -240,13 +252,18 @@
       (is (= '(clojure.core/defn f--positional {:no-doc true} [a] a) (nth expansion 3)))
       (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 5) 2))))
       (is (= [] (malli-symbols expansion)))))
-  (testing "a cljs dev build (not :advanced): no call-site macro is interned, so the ns records no :use-macros of its own and shadow-cljs keeps its cache"
-    (let [expansion (@#'defn-typed '(defn-typed h {:a :int} -> :int a) {:ns {:name 'fx1.dev-cljs}}
-                     'h '{:a :int} '-> :int 'a)]
-      (is (= 'do (first expansion)))
-      (is (nil? (find-ns 'fx1.dev-cljs)))))
+  (testing "a cljs dev build (not :advanced) interns the call-site macro too, and records it as the ns's own :use-macros"
+    (with-cljs-compiler :none ['fx1.dev-cljs]
+      (fn [compiler]
+        (let [expansion (@#'defn-typed '(defn-typed h {:a :int} -> :int a) {:ns {:name 'fx1.dev-cljs}}
+                         'h '{:a :int} '-> :int 'a)]
+          (is (= 'do (first expansion)))
+          (is (true? (:macro (meta (ns-resolve 'fx1.dev-cljs 'h)))))
+          (is (= 'fx1.dev-cljs (get-in @compiler [:cljs.analyzer/namespaces 'fx1.dev-cljs :use-macros 'h])))))))
   (testing "defmeta: in cljs every registration is under goog.DEBUG, so a release build (goog.DEBUG false) drops the cases, the :meta and #'f; in clj it registers at load"
-    (let [expand #(@#'defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})
+    (with-cljs-compiler :none ['app.core]
+     (fn [_]
+      (let [expand #(@#'defmeta '(defmeta g {}) %1 'g '{:doc "x" :inout-tests [[1 2]]})
           debug-gated? #(and (seq? %) (= 'clojure.core/when (first %)) (= 'goog.DEBUG (second %)))
           cljs (expand {:ns {:name 'app.core}})
           clj (expand nil)]
@@ -260,7 +277,7 @@
       (swap! @#'core/pending-meta dissoc 'app.core/g `g)
       (is (= 2 (count (filter debug-gated? cljs))))
       (is (= [] (filter debug-gated? clj)))
-      (is (= [] (malli-symbols cljs) (malli-symbols clj))))))
+      (is (= [] (malli-symbols cljs) (malli-symbols clj))))))))
 
 (defn- hook-findings
   "[row message] of each clj-kondo finding for code (a refer the snippet leaves unused, row 1, not
@@ -441,25 +458,89 @@
              (hook-findings (str "(defn-typed wide " (table 21) " -> :int a1)\n(wide--positional 1)")
                             (juxt :row :type :message)))))))
 
+(defn- expand-cljs-defn-typed
+  "Expands (defn-typed total …) as the cljs analyzer would in namespace ns-sym; returns the
+   call-site expander the expansion interned (it reads the fake compiler bound in cljs.env)."
+  [ns-sym]
+  (binding [*ns* (the-ns 'defn-typed.core-test)]
+    (@#'defn-typed '(defn-typed total {:qty [:int {:min 1}]} -> :int qty) {:ns {:name ns-sym}}
+     'total '{:qty [:int {:min 1}]} '-> :int 'qty))
+  @(ns-resolve ns-sym 'total))
+
+(defn- expand-call-site
+  "[the form the expander returns for (total {:qty q}), what the expansion printed to stderr]."
+  [expander ns-sym q]
+  (let [err (java.io.StringWriter.)]
+    [(binding [*err* err] (expander (list 'total {:qty q}) {:ns {:name ns-sym}} {:qty q})) (str err)]))
+
 (deftest cljs-expander-decides-per-compile
-  (testing "a JVM that ran a release (the expander interned) and then compiles in dev: the dev call is the plain call, no check, no rewrite"
-    (let [compiler (atom {:options {:optimizations :advanced}})
-          env {:ns {:name 'n1.shared-jvm}}]
-      (intern (create-ns 'cljs.env) '*compiler* compiler)
-      (try
-        (binding [*ns* (the-ns 'defn-typed.core-test)]
-          (@#'defn-typed '(defn-typed total {:qty [:int {:min 1}]} -> :int qty) env
-           'total '{:qty [:int {:min 1}]} '-> :int 'qty))
-        (let [expander @(ns-resolve 'n1.shared-jvm 'total)
-              form '(total {:qty 0})
-              expand (fn [] (let [err (java.io.StringWriter.)]
-                              [(binding [*err* err] (expander form env {:qty 0})) (str err)]))]
-          (is (re-find #"\(total …\) :qty 0 — should be at least 1" (second (expand))) "release: checked")
+  (testing "a JVM that ran a release (the expander interned) and then compiles in dev: the dev call is checked and stays the plain call"
+    (with-cljs-compiler :advanced ['n1.shared-jvm]
+      (fn [compiler]
+        (let [expander (expand-cljs-defn-typed 'n1.shared-jvm)]
+          (let [[form warning] (expand-call-site expander 'n1.shared-jvm 0)]
+            (is (= '(total {:qty 0}) form) "release: a wrong literal stays the plain call")
+            (is (re-find #"\(total …\) :qty 0 — should be at least 1" warning) "release: checked"))
+          (is (= ['(n1.shared-jvm/total--positional 1) ""] (expand-call-site expander 'n1.shared-jvm 1))
+              "release: a fitting literal is the positional call")
           (swap! compiler assoc-in [:options :optimizations] :none)
-          (is (= [form ""] (expand)) "dev in the same JVM: the plain call, no warning"))
-        (finally
-          (remove-ns 'cljs.env)
-          (remove-ns 'n1.shared-jvm))))))
+          (let [[form warning] (expand-call-site expander 'n1.shared-jvm 0)]
+            (is (= '(total {:qty 0}) form) "dev in the same JVM: the plain call")
+            (is (re-find #"\(total …\) :qty 0 — should be at least 1" warning) "dev in the same JVM: checked"))
+          (is (= ['(total {:qty 1}) ""] (expand-call-site expander 'n1.shared-jvm 1))
+              "dev in the same JVM: a fitting literal stays the plain call"))))))
+
+(deftest cljs-dev-expander-checks-literals
+  (testing "a dev build (the compiler's :optimizations is :none) interns the call-site expander: a wrong literal prints the warning, every call stays the plain call"
+    (with-cljs-compiler :none ['n2.dev-first]
+      (fn [_]
+        (let [expander (expand-cljs-defn-typed 'n2.dev-first)
+              [form warning] (expand-call-site expander 'n2.dev-first 0)]
+          (is (= '(total {:qty 0}) form) "a wrong literal: the plain call")
+          (is (re-find #"^WARNING defn-typed .*: \(total …\) :qty 0 — should be at least 1\n$" warning) "a wrong literal: one warning")
+          (is (= ['(total {:qty 1}) ""] (expand-call-site expander 'n2.dev-first 1))
+              "a fitting literal: the plain call, no warning"))))))
+
+(deftest cljs-dev-expander-follows-literal-check
+  (testing "a dev build with the literal check off (the system property): no call-site expander is interned, so shadow-cljs keeps its cache"
+    (with-cljs-compiler :none ['n3.dev-off]
+      (fn [compiler]
+        (System/setProperty "defn-typed.literal-check" "off")
+        (try
+          (binding [*ns* (the-ns 'defn-typed.core-test)]
+            (@#'defn-typed '(defn-typed total {:qty [:int {:min 1}]} -> :int qty) {:ns {:name 'n3.dev-off}}
+             'total '{:qty [:int {:min 1}]} '-> :int 'qty))
+          (is (nil? (find-ns 'n3.dev-off)))
+          (is (nil? (get-in @compiler [:cljs.analyzer/namespaces 'n3.dev-off :use-macros])))
+          (finally (System/clearProperty "defn-typed.literal-check"))))))
+  (testing "a release build with the literal check off still interns it: the call rewrite needs it"
+    (with-cljs-compiler :advanced ['n4.release-off]
+      (fn [_]
+        (System/setProperty "defn-typed.literal-check" "off")
+        (try
+          (binding [*ns* (the-ns 'defn-typed.core-test)]
+            (@#'defn-typed '(defn-typed total {:qty [:int {:min 1}]} -> :int qty) {:ns {:name 'n4.release-off}}
+             'total '{:qty [:int {:min 1}]} '-> :int 'qty))
+          (is (some? (find-ns 'n4.release-off)))
+          (finally (System/clearProperty "defn-typed.literal-check")))))))
+
+(deftest cljs-pending-vars
+  (testing "the vars an in/out case may call before they exist: the declared ones, and — when shadow-cljs recompiles a namespace over the analysis of its earlier compile, where a declare changed nothing — the functions this file's compile has not reached yet"
+    (with-cljs-compiler :none ['p.ns]
+      (fn [compiler]
+        (swap! compiler assoc-in [:cljs.analyzer/namespaces 'p.ns :defs]
+               {'declared {:declared true}
+                'early {:fn-var true}
+                'later {:fn-var true}
+                'a-macro {:fn-var true :macro true}
+                'a-value {}})
+        (intern (create-ns 'cljs.analyzer) '*file-defs* (atom #{'early}))
+        (try
+          (is (= '[(var p.ns/declared) (var p.ns/later)]
+                 (@#'core/pending-vars {:ns {:name 'p.ns}})))
+          (finally (remove-ns 'cljs.analyzer))))))
+  (testing "clj: none"
+    (is (nil? (@#'core/pending-vars nil)))))
 
 (deftest typed-check-without-typed-clojure
   (testing "Typed Clojure not on the classpath (this suite): a definition whose body contradicts its output schema prints nothing, emits no check, never loads the bridge"
