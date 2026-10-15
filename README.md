@@ -43,7 +43,7 @@ shape, and builds everything else from the one signature:
 - **type checking** (optional, clj): Typed Clojure checks bodies and call sites against the same
   signature, including a body that returns a different type from its `->`, with no hand-written annotations (see Typed Clojure);
 - **compile-time literal checks**: a literal call with a missing key or an out-of-range value warns
-  during the build (see Compile-time literal checks);
+  during the build — keys always; values and ranges where malli is loaded when the call compiles (dev/test/REPL loaders, every ClojureScript build) (see Compile-time literal checks);
 - **runtime contracts**: every call is checked in the REPL and in tests;
 - **example tests**: the `[in out]` pairs above the function run as tests;
 - **zero-cost calls**: in release builds a literal-map call compiles to a positional call, as fast
@@ -66,8 +66,8 @@ range is checked at runtime, on every call, only while malli instrumentation is 
 after `(malli.dev/start!)`, in tests after `(defn-typed.core/instrument!)`. Without instrumentation
 nothing is checked at run time, and cljs release builds contain no malli at all (unless you opt
 functions in, see malli in production). Literal calls such
-as `(order-total {:discount 150})` are also checked at compile time — see Compile-time literal
-checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
+as `(order-total {:discount 150})` are also checked at compile time — keys always; values and ranges where malli is loaded when the call compiles (dev/test/REPL loaders, every ClojureScript build); see Compile-time
+literal checks. clj-kondo checks keys and types (not the range) as you type, once the types are emitted —
 see Static checking.
 
 ## Forms
@@ -174,7 +174,7 @@ What is checked where:
   at compile time, real maps in dev builds (`:unknown-keys`); malli checks maps as open maps. clj-kondo's types carry no ranges and read every
   map as open.
 - **Compile** (the macro, at every map-literal call; cljs: every build, see
-  [Compile-time literal checks](#compile-time-literal-checks)): unknown keys, missing keys, and values that are data against their row schema, ranges included.
+  [Compile-time literal checks](#compile-time-literal-checks)): unknown keys, missing keys, and values that are data against their row schema, ranges included — keys always; values and ranges where malli is loaded when the call compiles (dev/test/REPL loaders, every ClojureScript build).
 - **Release**: nothing, except the functions you opt in (see
   [malli in production](#malli-in-production)). The types live in `.clj-kondo`, instrumentation
   only in dev/test.
@@ -236,7 +236,7 @@ What it finds, on the seven planted bugs of
 | | | **7 / 7** | **5 / 7** |
 
 clj-kondo here = the exported hooks plus the types of step 2 above (defn-typed.kondo); with the hooks alone it
-finds 2 of 7 (the two results used as numbers).
+finds 1 of 7 (a `:string` result used as a number).
 
 Timing: about 17 ms per form on a warm JVM (an application namespace); the fixture's 21 forms take
 121 ms together (median 5 ms, slowest 23 ms). Check form by form, each with a deadline: over a very
@@ -337,7 +337,7 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
   (maps are compared key by key, every other value as a whole), then the case's input:
 
   ```
-  WARNING src/shop/order.clj:4 shop.order/place-order in/out case 0: [:sku] expected "bmx", got "sd" — input {:order {:sku "sd", :address {:city "Минск"}}}
+  WARNING shop/order.clj:4 shop.order/place-order in/out case 0: [:sku] expected "bmx", got "sd" — input {:order {:sku "sd", :address {:city "Минск"}}}
   ```
 
   A key only in `out` reads `[:qty] expected 1, missing`, a key only in the result
@@ -345,7 +345,7 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
   A case that throws names the exception first:
 
   ```
-  WARNING src/shop/order.clj:4 shop.order/place-order in/out case 1: threw Divide by zero (expected 0) — input {:n 0}
+  WARNING shop/order.clj:4 shop.order/place-order in/out case 1: threw Divide by zero (expected 0) — input {:n 0}
   ```
 
   `assert-cases` (and so `deftests!`, `test-var!`, `test-ns!`) gives a failing case's assertion that
@@ -500,7 +500,7 @@ literal collection of those) against its row schema, ranges included. A map lite
 one line to stderr and the call compiles to the map call; the build goes on:
 
 ```
-WARNING defn-typed src/shop.clj:12: (order-total …) :qty 0 — should be at least 1
+WARNING defn-typed shop/cart.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
 
 With `{:literal-check :error}` in `defn-typed.edn` the mismatch is a compile error instead (see
@@ -615,8 +615,8 @@ Strict mode, a literal that fails the check does not compile:
 ```
 
 ```
-Syntax error (ExceptionInfo) compiling order-total at (shop.clj:12:3).
-defn-typed shop.clj:12: (order-total …) :qty 0 — should be at least 1
+Syntax error (ExceptionInfo) compiling order-total at (shop/cart.clj:12:3).
+defn-typed shop/cart.clj:12: (order-total …) :qty 0 — should be at least 1
 ```
 
 Dev and test turn the dev behaviour on and keep the map call, so instrumentation checks every
