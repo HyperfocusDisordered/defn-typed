@@ -3,6 +3,11 @@
 ## Unreleased
 
 - docs: tagline on README/pom/GitHub, one arity by design.
+- malli floor measured: every suite passes on malli 0.16.3 and later; the 0.3.2 README's 0.11.0
+  was wrong (the clj suite fails below 0.16.3).
+- docs: README opens with one complete example, Install with the dev/test alias, what runs where,
+  the REPL and adoption; CHANGELOG 0.3.2 lists every user-visible change, Breaking first;
+  `examples/claude-code` emits types with `defn-typed.kondo/emit!`.
 - The jar ships no clj-kondo `.cache` (0.3.2 carried one under `clj-kondo.exports/`): removed from git, ignored, and `build.clj` drops any `.cache` dir before jarring.
 
 ## 0.3.2 (2026-10-15)
