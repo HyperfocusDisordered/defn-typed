@@ -431,6 +431,37 @@
             (or (some destructuring? form) (next body))))))
 
 #?(:clj
+   (defn form-parts
+     "The parts of a defn-typed form after its name, `more` = `({key schema …} -> <out-schema> body…)`
+      or `([T …] {key schema …} -> <out-schema> body…)`, as the macro reads them:
+      `{:table [:map …] :input [:map …] :output <out-schema> :body (body…)}` — `:table` the rows
+      as written (table-rows, type variables replaced: with-type-vars), `:input` the same with every
+      defaulted row marked `{:optional true}` (defaults-optional), the schema the function's
+      `<name>-props` holds. Calls fail! (a fn of one message that throws) on a docstring, a missing
+      `->` / output / input, an argument vector, a bad table or type-variable vector, and `:default`
+      in a row's entry props. defn-typed.kondo reads source forms through it."
+     [fail! more]
+     (when (string? (first more))
+       (fail! "docstring goes to defmeta"))
+     (let [[input [arrow & after-arrow]] (split-with #(not= '-> %) more)
+           ;; a vector right before the input map lists the type variables
+           [type-vars input] (if (and (vector? (first input)) (next input)) [(first input) (rest input)] [nil input])
+           [out-schema & body] after-arrow]
+       (when-not (= '-> arrow)
+         (fail! "expected -> between the input rows and the output schema"))
+       (when (empty? after-arrow)
+         (fail! "no output schema after ->"))
+       (when (empty? input)
+         (fail! "no input rows between the name and ->"))
+       (when (arg-vector? body)
+         (fail! (str "args are bound from the rows: drop the argument vector " (pr-str (first body)))))
+       (let [[input out-schema] (with-type-vars {:fail! fail! :type-vars type-vars :input input :out-schema out-schema})
+             table (table-rows fail! input)]
+         (when-let [paths (seq (entry-default-paths table))]
+           (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))
+         {:table table :input (defaults-optional table) :output out-schema :body body}))))
+
+#?(:clj
    (defonce ^:private pending-meta
      (atom {})))
 
@@ -1749,26 +1780,8 @@
                        (throw (ex-info (str "defn-typed " fn-name ": " %) {:type ::invalid-form :fn fn-name})))
             _ (when-not (symbol? fn-name)
                 (fail! "the first argument must be the function's name"))
-            _ (when (string? (first more))
-                (fail! "docstring goes to defmeta"))
-            [input [arrow & after-arrow]] (split-with #(not= '-> %) more)
-            ;; a vector right before the input map lists the type variables
-            [type-vars input] (if (and (vector? (first input)) (next input)) [(first input) (rest input)] [nil input])
-            [out-schema & body] after-arrow]
-        (when-not (= '-> arrow)
-          (fail! "expected -> between the input rows and the output schema"))
-        (when (empty? after-arrow)
-          (fail! "no output schema after ->"))
-        (when (empty? input)
-          (fail! "no input rows between the name and ->"))
-        (when (arg-vector? body)
-          (fail! (str "args are bound from the rows: drop the argument vector " (pr-str (first body)))))
+            {table :table in-schema :input out-schema :output body :body} (form-parts fail! more)]
         (let [_ @project-settings ; a bad defn-typed.edn fails the first definition
-              [input out-schema] (with-type-vars {:fail! fail! :type-vars type-vars :input input :out-schema out-schema})
-              table (table-rows fail! input)
-              _ (when-let [paths (seq (entry-default-paths table))]
-                  (fail! (str (apply str (interpose ", " (map path-text paths))) " · " entry-default-rule)))
-              in-schema (defaults-optional table)
               ;; a row whose type holds a symbol or a call shows its default only when evaluated
               props-form (into [] (map #(if (and (vector? %) (not (constant-form? (peek %))))
                                           `(optional-if-defaulted ~%)
