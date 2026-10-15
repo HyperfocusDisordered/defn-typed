@@ -70,6 +70,31 @@
       (is (= {:registered? true :watches 1 :signature? true}
              (select-keys result [:registered? :watches :signature?]))))))
 
+(defn- tests-registered?
+  "Loads a namespace ns-name whose positional clamp registers its cases through the legacy `tests`
+   macro, with defn-typed.dev = dev; whether the registry then holds clamp. The namespace and its
+   registration are removed."
+  [ns-name dev]
+  (let [file (java.io.File/createTempFile (str ns-name "-") ".clj")
+        q (symbol (str ns-name) "clamp")]
+    (.deleteOnExit file)
+    (spit file (str/join "\n" [(str "(ns " ns-name ")")
+                               "(defn clamp [n lo hi] (max lo (min hi n)))"
+                               "(defn-typed.core/tests #'clamp [[[5 0 3] 3]])"
+                               ""]))
+    (try
+      (with-dev dev #(load-file (.getPath file)))
+      (contains? @core/registry q)
+      (finally
+        (swap! core/registry dissoc q)
+        (remove-ns ns-name)))))
+
+(deftest legacy-tests-registers-in-dev-only
+  (testing "the legacy `tests` macro, like defmeta: a load with :dev off registers no cases, with :dev on it does"
+    (is (= {nil false "false" false "true" true}
+           (into {} (for [[ns-name dev] [['dev-flag.tests-unset nil] ['dev-flag.tests-off "false"] ['dev-flag.tests-on "true"]]]
+                      [dev (tests-registered? ns-name dev)]))))))
+
 (deftest instrument-is-a-no-op-without-dev
   (testing "defn-typed.core/instrument! with :dev off: nil, nothing instrumented"
     (is (nil? (with-dev "false" #(core/instrument! {:filters [(fn [_ _ _] false)]}))))))

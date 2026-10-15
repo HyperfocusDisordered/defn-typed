@@ -47,7 +47,7 @@
 (defn var-name [v] (symbol v))
 
 ;; the :report-success load report (defined after load-scope), fed from the checks above it
-#?(:clj (declare ^:private update-load-report! ^:private load-failed!))
+#?(:clj (declare ^:private update-load-report! ^:private load-failed! ^:private dev-only))
 
 (defn- pairs-check!
   "Throws, naming sym, unless pairs is nil (no cases) or a vector of [[args…] expected] pairs."
@@ -246,14 +246,10 @@
      "Legacy: registers v's cases, a vector of [[args…] expected] pairs, for a function of several
       positional args (defmeta's `:inout-tests` is the form for a function of one argument):
       (tests #'ns/f [[[args…] expected] …]). Replaces
-      earlier ones. In cljs the registration, and with it the var #'f and its metadata, exists
-      only under goog.DEBUG: a release build drops all of it."
+      earlier ones. The registration, and with it the var #'f, exists in dev builds only, as
+      defmeta's (dev-only): cljs under goog.DEBUG, clj with the `:dev` setting on."
      [v pairs]
-     (if (:ns &env)
-       ;; tag built outside the syntax-quote, which would resolve `boolean` to clojure.core/boolean
-       ;; and lose the hint that lets Closure drop the branch
-       `(when ~(with-meta 'goog.DEBUG {:tag 'boolean}) (register-tests! ~v ~pairs))
-       `(register-tests! ~v ~pairs))))
+     (dev-only (boolean (:ns &env)) `(register-tests! ~v ~pairs))))
 
 (defn- row-parts
   "[k row-props type] of a `[:map …]` row, written [k type] or [k row-props type]."
