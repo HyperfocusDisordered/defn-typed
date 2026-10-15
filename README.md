@@ -241,7 +241,7 @@ definition is then checked as it loads, see `:typed-check` in [Configuration](#c
 (install! {:namespaces ['my.app.core]})      ; again after reloading a namespace
 
 (check-form! {:ns 'my.app.core :form form :file "src/my/app/core.clj"})
-;; => [{:file "src/my/app/core.clj" :line 12 :column 3 :defn-typed? true
+;; => [{:file "src/my/app/core.clj" :line 12 :column 3 :defn-typed? true :kind nil
 ;;      :message "Function inc could not be applied to arguments: …"}]
 ```
 
@@ -253,7 +253,9 @@ definition is then checked as it loads, see `:typed-check` in [Configuration](#c
 - Loading `defn-typed.typed-clojure` teaches typed.malli the `[:tuple …]` schema:
   `[:tuple :int :string]` is `(t/HVec [t/AnyInteger t/Str])` (typed.malli alone reads it as `t/Any`).
 - `check-form!` checks one top-level form (read from the file with its `:line`) and returns every
-  type error as data. `:defn-typed?` is true when the error is inside a `(defn-typed …)` form or
+  type error as data. `:kind` is `:input` when a call of a defn-typed function does not fit its
+  rows (the message starts `input of <f>: `), `:output` when a defn-typed body does not fit its
+  `->` (`output of <f>: `), nil otherwise. `:defn-typed?` is true when the error is inside a `(defn-typed …)` form or
   its form calls a defn-typed function: a per-edit hook reports those first, while the rest of the
   code has no annotations yet.
 - It checks with `:check-form-eval :never`. Typed Clojure's default, `:after`, evaluates every
