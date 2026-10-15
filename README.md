@@ -102,62 +102,67 @@ Works in Clojure and ClojureScript (`.clj`, `.cljs`, `.cljc`).
 
 ## Static checking
 
-clj-kondo reports wrong calls of `defn-typed` functions once malli has written the functions'
-types into the project's `.clj-kondo` directory. In the consuming project:
+clj-kondo reports wrong calls of `defn-typed` functions once their types are in the project's
+`.clj-kondo` directory. In the consuming project:
 
 ```sh
 # 1. the defn-typed hooks (once, and again after upgrading the library)
 mkdir -p .clj-kondo   # clj-kondo copies configs only into an existing config dir
 clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
 
-# 2. the types: load your namespaces, collect their schemas, emit (again after a schema change)
-clojure -M -e "(require 'my.app.core 'malli.instrument 'malli.clj-kondo) (do (malli.instrument/collect! {:ns (all-ns)}) (malli.clj-kondo/emit!))"
+# 2. the types (again after a signature change; see Editor types below)
+clojure -M -m defn-typed.kondo --src-dir src --out .clj-kondo/imports/defn-typed/types/config.edn
 
 # 3. lint as usual
 clj-kondo --lint src
 ```
 
-Step 2 writes `.clj-kondo/imports/metosin/malli-types-clj/config.edn`, which clj-kondo loads with
-no further config; it covers functions defined in `.clj` and `.cljc` files. With the hooks alone
-clj-kondo checks the form's shape and the body, not the types of the calls.
-
-In a REPL, `(malli.dev/start!)` does step 2 and instruments; after redefining a function, re-run
-`(malli.instrument/collect! {:ns ['my.app.core]})` to re-emit; `(malli.dev/stop!)` empties the
-types file.
+With the hooks alone clj-kondo checks the form's shape and the body, not the types of the calls.
 
 ```clojure
 (order-total {:price "100"})   ; error: Expected: integer, received: string.
 (order-total {:qty 2})         ; error: Missing required key: :price
 ```
 
-Functions defined in `.cljs` files (shadow-cljs): copy the hooks from
-`--lint "$(npx shadow-cljs classpath)"`, and get the types from a small node build that prints
-them with malli's `print-cljs!`:
+### Editor types (clj-kondo)
+
+`defn-typed.kondo` reads the source files and writes the clj-kondo config of every typed function
+under the dirs: each `defn-typed` / `defnt` (its input read by the macro's own `form-parts`, a
+defaulted row optional) and each plain `defn` carrying `:malli/schema`. It loads no namespace, so
+`.clj`, `.cljc` and `.cljs` files are covered alike (a `.cljs` file through its `:cljs` reader
+branches), and it runs in any JVM with the library on the classpath:
 
 ```clojure
-;; shadow-cljs.edn, under :builds
-:kondo-types {:target :node-script :main my.app.kondo-types/main :output-to "out/kondo-types.js"}
-
-;; src/my/app/kondo_types.cljs
-(ns my.app.kondo-types
-  (:require [my.app.core]               ; every namespace whose functions get types
-            [malli.instrument :as mi]
-            [malli.clj-kondo :as mc]))
-
-(defn main []
-  (mi/collect! {:ns [my.app.core]})     ; a literal list: cljs collects at compile time
-  (mc/print-cljs!))
+(defn-typed.kondo/emit! {:src-dirs ["src" "test"] :out ".clj-kondo/imports/defn-typed/types/config.edn"})
+;; => {:written? true :fns 42 :out ".clj-kondo/imports/defn-typed/types/config.edn"}
 ```
 
 ```sh
-npx shadow-cljs compile kondo-types
-mkdir -p .clj-kondo/imports/metosin/malli-types-cljs
-node out/kondo-types.js > .clj-kondo/imports/metosin/malli-types-cljs/config.edn
+clojure -M -m defn-typed.kondo --src-dir src --src-dir test --out .clj-kondo/imports/defn-typed/types/config.edn
+# stderr: OK 42 fns → .clj-kondo/imports/defn-typed/types/config.edn   (stdout stays empty)
+```
+
+clj-kondo loads a config under `.clj-kondo/imports/` with no further setting; another path needs
+`:config-paths`. In a schema, a symbol naming a top-level `def` of the same namespace (or of the
+namespace it is `:refer`red from) stands for that def's value, and `[:fn …]` for `:any`. The
+output is canonical (every map sorted by key) and the file is written only when its text changes,
+so the same sources leave it, and its git diff, alone; `:written? false` says so. malli's global
+function-schema registry is not touched, so a REPL's own registrations stay as they are.
+
+An after-edit hook keeps the types current by calling it in the project's warm REPL (nREPL) before
+it lints the edited file, and falling back to the CLI when no REPL runs:
+
+```sh
+# after-edit hook, $file under src/ edited; nrepl-eval = your nREPL client (fails when no REPL runs)
+form='(defn-typed.kondo/emit! {:src-dirs ["src"] :out ".clj-kondo/imports/defn-typed/types/config.edn"})'
+nrepl-eval "(do (require 'defn-typed.kondo) $form)" \
+  || clojure -M -m defn-typed.kondo --src-dir src --out .clj-kondo/imports/defn-typed/types/config.edn
+clj-kondo --lint "$file"
 ```
 
 What is checked where:
 
-- **Static** (clj-kondo, after step 2), at the call site:
+- **Static** (clj-kondo, once the types are emitted), at the call site:
   - a value of the wrong type in a row: `(order-total {:price "100"})`;
   - a missing required key: `(order-total {:qty 2})`;
   - a wrong type inside a nested map row: `(ship {:addr {:zip "x"}})`, `ship`'s row
@@ -231,7 +236,7 @@ What it finds, on the seven planted bugs of
 | the body returns another type than `->` | `(defn-typed lot-count {:label :string} -> :int (str label))` | yes | no |
 | | | **7 / 7** | **5 / 7** |
 
-clj-kondo here = the exported hooks plus the malli types of step 2 above; with the hooks alone it
+clj-kondo here = the exported hooks plus the types of step 2 above (defn-typed.kondo); with the hooks alone it
 finds 2 of 7 (the two results used as numbers).
 
 Timing: about 17 ms per form on a warm JVM (an application namespace); the fixture's 21 forms take
