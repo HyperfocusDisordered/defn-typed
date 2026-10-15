@@ -770,7 +770,9 @@ The hooks ship in `resources/clj-kondo.exports/io.github.hyperfocusdisordered/de
 further config (checked with clj-kondo v2026.01.19). The `defn-typed` hook lints the rows, the
 arrow and the body as the `def` and the two `defn`s above, with the row keys as locals, so a direct
 `name--positional` call resolves and its arity is checked, and reports the same shape errors as the
-macro; a row the body never reads is clj-kondo's `unused binding` at its key; the `defn` it lints
+macro; a row whose name appears nowhere in the body is clj-kondo's `unused binding` at its key (a
+nested fn that re-destructures the props, as a Reagent form-2 or `create-class` render fn does,
+counts as reading the row); the `defn` it lints
 carries the `:doc` of the `defmeta` above, in clj-kondo's analysis, which clojure-lsp's hover reads.
 The `defmeta` hook lints the map as code. The exported config excludes `name-props` and
 `name--positional` from clojure-lsp's `unused-public-var` (`:exclude-regex`).

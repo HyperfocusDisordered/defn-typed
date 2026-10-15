@@ -474,6 +474,33 @@
              (hook-findings (str "(defn-typed wide " (table 21) " -> :int " (sum 21) ")\n(wide--positional 1)")
                             (juxt :row :type :message)))))))
 
+(def ^:private reagent-fixture
+  "Namespace k (after hook-findings' ns line): Reagent-shaped defn-typed components whose rows the
+   body reads only inside a nested fn, a form-2 render fn closing over them or re-destructuring
+   the props, and a create-class map's :reagent-render; :unused is named nowhere in its body."
+  (str/join "\n" ["(defn create-class [m] m)"
+                  ""
+                  "(defn-typed closing {:title :string} -> :any"
+                  "  (fn [] [:h2 title])"
+                  ")"
+                  ""
+                  "(defn-typed card {:title :string :subtitle :string :unused :int} -> :any"
+                  "  (fn [{:keys [title subtitle]}]"
+                  "    [:div [:h2 title] [:p subtitle]])"
+                  ")"
+                  ""
+                  "(defn-typed rail {:title :string :items [:sequential :any] :page :any} -> :any"
+                  "  (let [node (atom nil)]"
+                  "    (create-class"
+                  "      {:component-will-unmount (fn [] (reset! node nil))"
+                  "       :reagent-render (fn [{:keys [title items]}] [:div {:title title} (count items) @page])}))"
+                  ")"]))
+
+(deftest kondo-hook-row-read-in-a-nested-fn
+  (testing "a row whose name the body holds anywhere (a form-2 render fn, a create-class map's render fn re-destructuring the props) is read; a row named nowhere in the body is the one unused binding"
+    (is (= [[8 52 :unused-binding "unused binding unused"]]
+           (hook-findings reagent-fixture (juxt :row :col :type :message))))))
+
 (defn- expand-cljs-defn-typed
   "Expands (defn-typed total …) as the cljs analyzer would in namespace ns-sym; returns the
    call-site expander the expansion interned (it reads the fake compiler bound in cljs.env)."
