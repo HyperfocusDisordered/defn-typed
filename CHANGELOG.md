@@ -3,6 +3,7 @@
 ## Unreleased
 
 - docs: tagline on README/pom/GitHub, one arity by design.
+- The jar ships no clj-kondo `.cache` (0.3.2 carried one under `clj-kondo.exports/`): removed from git, ignored, and `build.clj` drops any `.cache` dir before jarring.
 
 ## 0.3.2 (2026-10-15)
 

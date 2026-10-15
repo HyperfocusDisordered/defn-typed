@@ -2,6 +2,7 @@
   "Release: `clojure -T:build jar` → target/defn-typed-<version>.jar;
   `clojure -T:build deploy` → Clojars (CLOJARS_USERNAME / CLOJARS_PASSWORD from env)."
   (:require [clojure.data.xml :as xml]
+            [clojure.java.io :as io]
             [clojure.tools.build.api :as b]
             [deps-deploy.deps-deploy :as dd]))
 
@@ -45,6 +46,14 @@
                     (partial map #(cond-> %
                                     (= ::pom/dependencies (:tag %)) (update :content concat deps))))))))
 
+(defn- delete-caches!
+  "Deletes every `.cache` directory under `dir`: clj-kondo writes one beside a config dir it
+  lints (resources/clj-kondo.exports/…/.cache), and the jar ships none."
+  [dir]
+  (doseq [cache (filterv #(and (.isDirectory ^java.io.File %) (= ".cache" (.getName ^java.io.File %)))
+                         (file-seq (io/file dir)))]
+    (b/delete {:path (.getPath ^java.io.File cache)})))
+
 (defn clean [_]
   (b/delete {:path "target"}))
 
@@ -66,6 +75,7 @@
     (add-dependencies! (b/pom-path {:lib lib :class-dir class-dir}) (provided-deps basis))
     (b/copy-dir {:src-dirs ["src" "resources"]
                  :target-dir class-dir})
+    (delete-caches! class-dir)
     (b/jar {:class-dir class-dir
             :jar-file jar-file})
     (println "built" jar-file)))
