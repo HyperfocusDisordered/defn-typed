@@ -581,7 +581,7 @@
         (is (= (str "defn-typed: defn-typed.schema-typo/order-total — invalid schema for :qty: unknown schema :it (did you mean :int?)"
                     " — :malli.core/invalid-schema {:schema :it} (test/defn_typed/schema_typo.clj:11)")
                message))
-        (is (= {:fn 'defn-typed.schema-typo/order-total :row :qty :schema [:it {:min 1 :default 1}]
+        (is (= {:type :defn-typed.core/invalid-schema :fn 'defn-typed.schema-typo/order-total :row :qty :schema [:it {:min 1 :default 1}]
                 :malli/error {:type :malli.core/invalid-schema :message :malli.core/invalid-schema
                               :data {:schema :it :form [:it {:min 1 :default 1}]}}}
                data))
@@ -598,7 +598,7 @@
            (take 1 (load-error "defn_typed/schema_cases.clj" (str cases-ns "(defn-typed f {:x [:vector :xyzq]} -> :any x)")))))
     (is (= [(str "defn-typed: defn-typed.schema-cases/f — invalid schema for the output: unknown schema :it (did you mean :int?)"
                  " — :malli.core/invalid-schema {:schema :it} (defn_typed/schema_cases.clj:2)")
-            {:fn 'defn-typed.schema-cases/f :output true :schema :it
+            {:type :defn-typed.core/invalid-schema :fn 'defn-typed.schema-cases/f :output true :schema :it
              :malli/error {:type :malli.core/invalid-schema :message :malli.core/invalid-schema
                            :data {:schema :it :form :it}}}]
            (load-error "defn_typed/schema_cases.clj" (str cases-ns "(defn-typed f {:n :int} -> :it n)")))))

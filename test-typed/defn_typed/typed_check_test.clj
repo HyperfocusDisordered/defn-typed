@@ -46,6 +46,7 @@
     (let [[_ thrown] (load-fixture! :error)
           root (last (take-while some? (iterate ex-cause thrown)))]
       (is (some? thrown))
+      (is (= :defn-typed.core/typed-check (:type (ex-data root))))
       (is (re-find #"^defn-typed defn_typed/typed_check_fixture\.clj:\d+ output of shout: Type mismatch:" (str (ex-message root)))))))
 
 (deftest off-does-nothing

@@ -60,7 +60,7 @@
       #?(:clj (some-> (namespace sym) symbol load-failed!))
       (throw (ex-info (str "defn-typed: " sym " cases must be a vector of [[args…] expected] pairs, got "
                            (pr-str (first bad)))
-                      {:var sym :case (first bad)})))))
+                      {:type ::invalid-cases :var sym :case (first bad)})))))
 
 (defonce registry (atom {}))
 
@@ -89,7 +89,7 @@
       #?(:clj (some-> (namespace sym) symbol load-failed!))
       (throw (ex-info (str "defn-typed: " sym " defmeta cases must be a vector of [in expected] pairs, got "
                            (pr-str (first bad)))
-                      {:var sym :case (first bad)})))
+                      {:type ::invalid-cases :var sym :case (first bad)})))
     (mapv (fn [[in expected]] [[in] expected]) pairs)))
 
 (defn shown-in
@@ -153,14 +153,15 @@
    `:unknown-keys` setting (mode) says: `:warn` prints `defn-typed: <ns/fn> unknown key :k — the keys
    are :a :b` once per (fn, set of unknown keys) per process (clj stderr, cljs console.warn), up to
    unknown-keys-report-limit pairs, then one muted line and nothing more; the call proceeds.
-   `:error` throws an ex-info of that text with `{:fn :unknown-keys :keys}`, every time."
+   `:error` throws an ex-info of that text with `{:type ::unknown-keys :fn :unknown-keys :keys}`,
+   every time."
   [{fn-name :fn row-keys :keys :keys [mode unknown-keys]}]
   (let [text (str "defn-typed: " fn-name " unknown key" (when (next unknown-keys) "s") " "
                   (apply str (interpose " " (map pr-str unknown-keys)))
                   " — the keys are " (apply str (interpose " " (map pr-str row-keys))))]
     (if (= :error mode)
       (do #?(:clj (load-failed! (ns-name *ns*)))
-          (throw (ex-info text {:fn fn-name :unknown-keys unknown-keys :keys row-keys})))
+          (throw (ex-info text {:type ::unknown-keys :fn fn-name :unknown-keys unknown-keys :keys row-keys})))
       (let [pair [fn-name (set unknown-keys)]
             [before after] (swap-vals! unknown-keys-reported remember-report pair)
             line (cond
@@ -577,15 +578,15 @@
      (let [where (str "defn-typed " (some-> file .getPath) ": ")
            m (if file (clojure.edn/read-string (slurp file)) {})]
        (when-not (map? m)
-         (throw (ex-info (str where "the settings must be a map, got " (pr-str m)) {:file file})))
+         (throw (ex-info (str where "the settings must be a map, got " (pr-str m)) {:type ::setting :file file})))
        (doseq [[k v] m]
          (cond
            (not (contains? setting-values k))
            (throw (ex-info (str where "unknown key " (pr-str k) " — the keys are "
                                 (apply str (interpose ", " (keys setting-values))))
-                           {:file file :key k}))
+                           {:type ::setting :file file :key k}))
            (setting-value-problem k v)
-           (throw (ex-info (str where (setting-value-problem k v)) {:file file :key k}))
+           (throw (ex-info (str where (setting-value-problem k v)) {:type ::setting :file file :key k}))
            ;; a known key with an allowed value: merged below
            :else nil))
        (merge (into {} (map (fn [[k vs]] [k (first vs)])) setting-values) m))))
@@ -615,7 +616,7 @@
          :else (throw (ex-info (str "defn-typed: the system property defn-typed." (name k)
                                     " must be one of " (apply str (interpose ", " (map name (get setting-values k))))
                                     ", got " (pr-str property))
-                               {:property (str "defn-typed." (name k))}))))))
+                               {:type ::setting :property (str "defn-typed." (name k))}))))))
 
 #?(:clj
    (defn- inline-on?
@@ -765,7 +766,8 @@
          (load-failed! (symbol (namespace f)))
          (throw (ex-info (str "defn-typed: " f " — invalid schema for " (if output "the output" (pr-str row)) ": "
                               hint cause " (" (project-path file) ":" line ")")
-                         (merge {:fn f :schema schema :malli/error error} (select-keys item [:row :output]))))))))
+                         (merge {:type ::invalid-schema :fn f :schema schema :malli/error error}
+                                (select-keys item [:row :output]))))))))
 
 #?(:clj
    (defn check-var-schemas!
@@ -1050,7 +1052,7 @@
                                (apply str (interpose "; " mismatches)))]
                  (when-not cljs? (load-failed! (ns-name *ns*)))
                  (if (= :error literal-check)
-                   (throw (ex-info text {::literal-mismatches (vec mismatches)}))
+                   (throw (ex-info text {:type ::literal-call ::literal-mismatches (vec mismatches)}))
                    (binding [*out* *err*]
                      (println (str "WARNING " text))))))
              (if (and inline? (not mismatches) (:positional spec)
@@ -1365,7 +1367,7 @@
                          (let [texts (for [{:keys [message] :as finding} findings]
                                        (str "defn-typed " (or (:file finding) file) ":" (or (:line finding) line) " " message))]
                            (if (= :error mode)
-                             (throw (ex-info (clojure.string/join "\n" texts) {::typed-findings (vec findings)}))
+                             (throw (ex-info (clojure.string/join "\n" texts) {:type ::typed-check ::typed-findings (vec findings)}))
                              (doseq [text texts] (print-err! (str "WARNING " text)))))))))
        v)))
 
@@ -1685,7 +1687,7 @@
                           " — the call compiles as a map, not positionally; move the definition above the call"))]
          (load-failed! (ns-name *ns*))
          (if (= :error mode)
-           (throw (ex-info (clojure.string/join "\n" texts) {:fn q :lines (vec lines)}))
+           (throw (ex-info (clojure.string/join "\n" texts) {:type ::forward-call :fn q :lines (vec lines)}))
            (doseq [text texts] (print-err! text)))))))
 
 #?(:clj
@@ -1724,10 +1726,10 @@
       symbol or a call is judged as the definition loads (check-var-schemas!), and so is every
       schema of a definition the Typed Clojure bridge registers."
      ([] (when-not (:ns &env) (load-failed! (ns-name *ns*)))
-         (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {})))
+         (throw (ex-info "defn-typed: the first argument must be the function's name, got nothing" {:type ::invalid-form})))
      ([fn-name & more]
       (let [fail! #(do (when-not (:ns &env) (load-failed! (ns-name *ns*)))
-                       (throw (ex-info (str "defn-typed " fn-name ": " %) {:fn fn-name})))
+                       (throw (ex-info (str "defn-typed " fn-name ": " %) {:type ::invalid-form :fn fn-name})))
             _ (when-not (symbol? fn-name)
                 (fail! "the first argument must be the function's name"))
             _ (when (string? (first more))
@@ -1966,7 +1968,7 @@
       cases there (inout-check!), the defn-typed having found none above it."
      [fn-name m]
      (let [fail! #(do (when-not (:ns &env) (load-failed! (ns-name *ns*)))
-                      (throw (ex-info (str "defmeta " fn-name ": " %) {:fn fn-name})))
+                      (throw (ex-info (str "defmeta " fn-name ": " %) {:type ::invalid-form :fn fn-name})))
            cljs? (boolean (:ns &env))
            dev #(dev-only cljs? %)]
        (when-not (symbol? fn-name)
@@ -2221,7 +2223,7 @@
   [mode texts]
   (when (seq texts)
     (if (= :error mode)
-      (throw (ex-info (apply str (interpose "\n" texts)) {::inout-failures (vec texts)}))
+      (throw (ex-info (apply str (interpose "\n" texts)) {:type ::inout-failure ::inout-failures (vec texts)}))
       (doseq [text texts] (print-err! (str "WARNING " text))))))
 
 #?(:clj

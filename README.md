@@ -605,6 +605,25 @@ call; their aliases set the properties (the file is shared with production build
 - `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword in the attr-map):
   nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
 
+## Errors
+
+Every exception defn-typed throws is an `ex-info` whose `(:type (ex-data e))` is one of:
+
+| `:type` | thrown when |
+|---|---|
+| `:defn-typed.core/invalid-form` | a `defn-typed` / `defmeta` form is malformed (no name, a docstring, an argument vector, no `->`, metadata on the input map, …) |
+| `:defn-typed.core/invalid-schema` | a row or output schema malli cannot build |
+| `:defn-typed.core/invalid-cases` | `:inout-tests` (or legacy `tests`) is not a vector of pairs |
+| `:defn-typed.core/setting` | `defn-typed.edn` or a `defn-typed.*` system property holds an unknown key or a value outside its list |
+| `:defn-typed.core/literal-call` | a map-literal call fails its compile-time check under `:literal-check :error` |
+| `:defn-typed.core/forward-call` | a map-literal call compiled before its callee's definition, under `:literal-check :error` |
+| `:defn-typed.core/unknown-keys` | a real map holds keys beyond the rows, under `:unknown-keys :error` |
+| `:defn-typed.core/inout-failure` | an in/out case fails as the definition loads, under `:inout-check :error` |
+| `:defn-typed.core/typed-check` | Typed Clojure reports a finding as the definition loads, under `:typed-check :error` |
+
+A rejection by malli's instrumentation keeps malli's ex-data (`:malli.core/invalid-input`,
+`:malli.core/invalid-output`); `defn-typed.core/instrument!` only rewrites its message.
+
 ## malli in production
 
 To keep checking chosen functions in production, add `:malli-in-prod` to their `defmeta`. For

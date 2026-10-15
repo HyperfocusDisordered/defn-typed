@@ -221,7 +221,7 @@
           e (try (keyed-strict m) nil (catch #?(:clj Exception :cljs :default) e e))]
       (if dev?
         (do (is (= "defn-typed: defn-typed.inline-test/keyed-strict unknown key :zz — the keys are :a" (ex-message e)))
-            (is (= {:fn 'defn-typed.inline-test/keyed-strict :unknown-keys [:zz] :keys [:a]} (ex-data e))))
+            (is (= {:type :defn-typed.core/unknown-keys :fn 'defn-typed.inline-test/keyed-strict :unknown-keys [:zz] :keys [:a]} (ex-data e))))
         (is (nil? e))))
     (let [m {:a 1}]
       (is (= 1 (keyed-strict m)))))
