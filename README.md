@@ -456,9 +456,16 @@ The switch:
 
 A rewritten call skips `<name>`, so instrumentation does not see it: dev, REPL and test builds keep
 the switch off, where every call goes through the var. With it on, a caller compiled earlier still
-reaches a REPL redefinition of the body (it calls the `<name>--positional` var); a redefinition that
-changes the rows leaves it calling the new `<name>--positional` with the old row order (so does a
-caller compiled against an older version of the function).
+reaches a REPL redefinition of the body (it calls the `<name>--positional` var). A redefinition that
+changes the rows makes those callers stale: they call the new `<name>--positional` with the old row
+order. With `:dev` on, the redefinition prints the namespaces to reload (`:stale-callers :warn`,
+the default):
+
+```
+defn-typed: shop.price/order-total changed its signature; callers compiled with the old one: shop.cart — reload them
+```
+
+`:stale-callers :reload` reloads them itself (see [Configuration](#configuration)).
 
 A 3-row function with 2 defaults, `(total {:price p :qty 3})`, criterium `quick-bench` on JVM 21:
 positional `defn` 36 ns, switch off 51 ns, switch on 28 ns (0.1.4, which filled the defaults by
@@ -524,6 +531,11 @@ first macroexpansion; no file = the defaults.
   macro (see Zero-cost calls).
 - `:inline`: whether a fitting literal call compiles to the positional call in Clojure (see
   Zero-cost calls). ClojureScript decides by the build: on in release, off in dev.
+- `:stale-callers` (Clojure, `:dev` on): what a redefinition does to the namespaces whose literal
+  calls compiled against the old signature (a changed row order, or a changed schema var a row
+  refers to). `:warn` (default) prints one line naming them; `:reload` (opt-in) reloads each
+  caller's namespace from disk: top-level effects re-run, REPL-only edits in it are lost; `:off`
+  does nothing.
 - `:report-success`: after a file loads (`require`, `load-file`, an editor's load-file), one line
   per namespace whose defn-typed checks all passed (schemas, in/out cases, Typed Clojure), on the
   stream the `WARNING` lines use:

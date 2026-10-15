@@ -248,10 +248,10 @@
    (defmeta settings-of-file
      {:doc "defn-typed.core/settings-of-file: the settings a defn-typed.edn text gives, the defaults for what it leaves out; a bad file throws naming the file."
       :inout-tests [[{:text "{}"}
-                     {:settings {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload
+                     {:settings {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn
                                  :typed-check :warn :inout-check :warn :report-success false}}]
                     [{:text "{:literal-check :error :inline false}"}
-                     {:settings {:dev false :literal-check :error :unknown-keys :warn :inline false :stale-callers :reload
+                     {:settings {:dev false :literal-check :error :unknown-keys :warn :inline false :stale-callers :warn
                                  :typed-check :warn :inout-check :warn :report-success false}}]
                     [{:text "{:report-success true :stale-callers :off}"}
                      {:settings {:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :off

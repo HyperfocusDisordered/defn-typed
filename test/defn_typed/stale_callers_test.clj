@@ -43,7 +43,8 @@
       #(stderr-of (fn []
                     (require 'defn-typed.stale-callee :reload)
                     (require 'defn-typed.stale-caller :reload))))
-    (t)))
+    ;; the tests below judge :reload (opt-in); default-warns judges the default
+    (with-stale-callers :reload t)))
 
 (def reloaded-line
   "defn-typed: defn-typed.stale-callee/pair changed its signature, reloaded callers: defn-typed.stale-caller\n")
@@ -91,16 +92,23 @@
       (is (= loads @caller/loads))
       (is (= "" out)))))
 
+(def warn-line
+  (str "defn-typed: defn-typed.stale-callee/pair changed its signature; callers compiled with the old one:"
+       " defn-typed.stale-caller — reload them\n"))
+
+(deftest default-warns
+  (testing "unset (the default :warn): the callers are named, none reloaded"
+    (let [loads @caller/loads
+          out (with-stale-callers nil #(redefine! '(defn-typed pair {:b :int :a :int} -> :any [a b])))]
+      (is (= loads @caller/loads))
+      (is (= (if inline? warn-line "") out)))))
+
 (deftest warn-mode
   (testing ":stale-callers :warn prints the callers and reloads none"
     (let [loads @caller/loads
           out (with-stale-callers :warn #(redefine! '(defn-typed pair {:b :int :a :int} -> :any [a b])))]
       (is (= loads @caller/loads))
-      (is (= (if inline?
-               (str "defn-typed: defn-typed.stale-callee/pair changed its signature; callers compiled with the old one:"
-                    " defn-typed.stale-caller — reload them\n")
-               "")
-             out)))))
+      (is (= (if inline? warn-line "") out)))))
 
 (deftest off-mode
   (testing ":stale-callers :off: nothing reloaded, nothing printed"

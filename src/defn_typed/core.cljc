@@ -19,9 +19,9 @@
    (instrumented-before! 'f) before that defn and (keep-instrumented! #'f) after it, so a var malli
    instrumented stays instrumented when redefined, (signature! #'f \"…\") and, for rows typed by a
    schema var (`:order Order`), (watch-schemas! #'f [#'Order]); every call site goes through
-   expand-call, a redefinition with another signature reloads the namespaces whose calls compiled
-   to the old positional call, and a changed schema var reloads the function's namespace
-   (`:stale-callers` in defn-typed.edn). A definition whose defmeta holds cases runs them as it
+   expand-call, a redefinition with another signature names the namespaces whose calls compiled
+   to the old positional call, and a changed schema var names the function (`:stale-callers` in
+   defn-typed.edn: `:warn` by default, `:reload` reloads them from disk). A definition whose defmeta holds cases runs them as it
    loads (inout-check!, `:inout-check` in defn-typed.edn). With Typed Clojure on the classpath a
    clj definition then calls (typed-check! #'f …), which type-checks it (`:typed-check` in
    defn-typed.edn). Everything a definition does at load besides defining the function exists in
@@ -542,7 +542,7 @@
       :literal-check [:warn :error :off]
       :unknown-keys [:warn :error :off]
       :inline [true false]
-      :stale-callers [:reload :warn :off]
+      :stale-callers [:warn :reload :off]
       :typed-check [:warn :error :off]
       :inout-check [:warn :error :off]
       :report-success [false true]}))
@@ -567,7 +567,7 @@
 #?(:clj
    (defn settings-of-file
      "The settings a defn-typed.edn file (a java.io.File, or nil for none) gives: the defaults,
-      `{:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :reload
+      `{:dev false :literal-check :warn :unknown-keys :warn :inline true :stale-callers :warn
       :typed-check :warn :inout-check :warn :report-success false}`,
       merged with the file's map. Throws,
       naming the file, when its content is not a map, holds a key other than those, or a value
@@ -601,7 +601,7 @@
       (`defn-typed.inline`: anything but `false` is on; `defn-typed.dev` and
       `defn-typed.report-success`: `true` is on, anything else off; `defn-typed.literal-check`,
       `defn-typed.unknown-keys`, `defn-typed.typed-check` and `defn-typed.inout-check`: `warn`, `error`
-      or `off`; `defn-typed.stale-callers`: `reload`, `warn` or `off`), else the project's
+      or `off`; `defn-typed.stale-callers`: `warn`, `reload` or `off`), else the project's
       defn-typed.edn, else the default. A function's own `:literal-check` / `:unknown-keys` /
       `:typed-check` / `:inout-check` in its defmeta wins over it."
      [k]
@@ -1130,11 +1130,12 @@
       When an earlier definition of v had another signature, the namespaces holding a literal call
       compiled to its old positional call (inlined-callers) — other than v's own, which is the one
       loading, and one being loaded right now (it compiles against the new definition) — are stale,
-      and the `:stale-callers` setting says what happens: `:reload` reloads each from its file
-      (reload-namespace!; its literal calls are judged again, so an incompatible one shows its
-      warning) and prints `defn-typed: <f> changed its signature, reloaded callers: <ns>, …`;
-      `:warn` prints `defn-typed: <f> changed its signature; callers compiled with the old one:
-      <ns>, … — reload them`; `:off` does neither. Records v among the functions its namespace's
+      and the `:stale-callers` setting says what happens: `:warn` (the default) prints
+      `defn-typed: <f> changed its signature; callers compiled with the old one: <ns>, … — reload
+      them`; `:reload` (opt-in) reloads each from its file (reload-namespace!: top-level effects
+      re-run, REPL-only edits in it are lost; its literal calls are judged again, so an
+      incompatible one shows its warning) and prints `defn-typed: <f> changed its signature,
+      reloaded callers: <ns>, …`; `:off` does neither. Records v among the functions its namespace's
       load defines (update-load-report!). Returns v."
      [v signature]
      (let [f (symbol v)
@@ -1178,10 +1179,10 @@
    (defn- schema-changed!
      "What a changed schema var (schema-var, now another value) does to f (a qualified symbol)
       typed by it, per the `:stale-callers` setting: nothing while f's namespace is loading (that
-      load redefines f with the new value, e.g. a schema of f's own namespace); `:reload` reloads
-      f's namespace from its file (reload-namespace!), which redefines f, whose signature! then
-      acts on its callers; `:warn` prints `defn-typed: <schema var> changed; <f> and its callers use
-      the old one — reload them`; `:off` nothing."
+      load redefines f with the new value, e.g. a schema of f's own namespace); `:warn` (the
+      default) prints `defn-typed: <schema var> changed; <f> and its callers use the old one —
+      reload them`; `:reload` (opt-in) reloads f's namespace from its file (reload-namespace!),
+      which redefines f, whose signature! then acts on its callers; `:off` nothing."
      [f schema-var]
      (let [fn-ns (symbol (namespace f))]
        (when-not (loading? fn-ns)
