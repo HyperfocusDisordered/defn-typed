@@ -4,8 +4,7 @@
 [![Clojars Project](https://img.shields.io/clojars/v/io.github.hyperfocusdisordered/defn-typed.svg)](https://clojars.org/io.github.hyperfocusdisordered/defn-typed)
 [![cljdoc badge](https://cljdoc.org/badge/io.github.hyperfocusdisordered/defn-typed)](https://cljdoc.org/d/io.github.hyperfocusdisordered/defn-typed)
 
-Typed functions for Clojure: one signature gives you static checks, runtime contracts,
-compile-time literal checks and example tests, and a call costs what a positional call costs.
+Typed defn for Clojure and ClojureScript: one signature gives Typed Clojure static checks, compile-time literal-call checks, clj-kondo editor types, malli runtime contracts and example tests — and a call costs a positional call.
 
 ## Why
 
@@ -352,7 +351,9 @@ The three blocks run as a test (`test/defn_typed/readme_test.clj` evaluates them
   `assert-cases` (and so `deftests!`, `test-var!`, `test-ns!`) gives a failing case's assertion that
   same line as its message.
 - A docstring, an attr-map, an argument vector, or `->` with nothing after it inside `defn-typed` is
-  a compile error naming the function. Single arity only.
+  a compile error naming the function. A `defn-typed` function takes one map argument by design: its
+  named rows with defaults replace arities, and multi-arity, variadic or positional functions
+  stay `defn` (see Escape hatch).
 - A condition map `{:pre […] :post […]}` first in the body works as in `fn`, wherever the body
   lands (`<name>--positional`, or the function itself when its body `recur`s to it or it has more
   than 20 rows). As in `fn`, `:post` beside a `recur` to the function is a compile error (`Can only
@@ -795,7 +796,8 @@ Its call sites need no change: a literal-map call is a map call.
   into `malli.core` at load.
 - `defn-typed` takes one map argument whose rows are the schema, binds every row as a local,
   fills defaults from the rows, and stores the schema as `:malli/schema` metadata only (no malli
-  call in the expansion). The example pairs live beside it in `defmeta`. Single arity only.
+  call in the expansion). The example pairs live beside it in `defmeta`. One arity by design: named rows with
+  defaults replace arities, and multi-arity, variadic or positional functions stay `defn`.
 
 ## malli versions
 
