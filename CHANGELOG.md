@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 (unreleased)
 
+- Typed Clojure check: a definition whose check fingerprint was green before is not checked again
+  (`:typed-check-cache`, default `:on`). The fingerprint = the form, its schema, the schemas of
+  the functions it calls, Typed Clojure's and defn-typed's versions; green fingerprints are kept
+  on disk in `.defn-typed/typed-check-greens.txt` under the working directory (gitignore
+  `.defn-typed/`). A warm load of a project skips the checks of every unchanged definition; a
+  callee's changed schema re-checks its callers; a check with a finding always runs again.
+  `-Ddefn-typed.typed-check-cache=off` (or `:typed-check-cache :off` in `defn-typed.edn`) reads and
+  writes nothing.
 - docs: tagline on README/pom/GitHub, one arity by design.
 - malli floor measured: every suite passes on malli 0.16.3 and later; the 0.3.2 README's 0.11.0
   was wrong (the clj suite fails below 0.16.3).
