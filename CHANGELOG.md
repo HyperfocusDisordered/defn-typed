@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.3 (unreleased)
+## 0.3.3 (2026-10-22)
 
 - Typed Clojure check: the outcome of each check is kept under its fingerprint, and a definition
   whose fingerprint has a kept outcome is not checked again (`:typed-check-cache`, default `:on`):
