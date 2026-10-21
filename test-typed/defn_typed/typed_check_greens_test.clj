@@ -148,3 +148,13 @@
            (writer-idle!)
            (is (= 2 @calls))
            (is (not (.exists ^java.io.File file)))))))))
+
+(deftest identity-printed-values-are-stable
+  (testing "a row whose default is an object (printed #object[… 0x<hash> …]): a new instance of it keeps the fingerprint"
+    (with-cache :on
+      (fn [_]
+        (counting
+         (fn [calls]
+           (define! '(defn-typed pooled {:n :int :pool [:any {:default (Object.)}]} -> :int n))
+           (define! '(defn-typed pooled {:n :int :pool [:any {:default (Object.)}]} -> :int n))
+           (is (= 1 @calls))))))))

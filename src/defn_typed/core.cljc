@@ -1102,14 +1102,19 @@
 #?(:clj
    (defn- stable-text
      "x printed so that the same source gives the same string on every read: every generated
-      symbol (`p1__12#`, `x__12__auto__`, `G__12`) written `<stem>__#`, a fn inside a value as its
-      class name so written, a regex as its source, whole whatever the REPL's `*print-length*` /
+      symbol (`p1__12#`, `x__12__auto__`, `G__12`) written `<stem>__#`, a value that prints with
+      its identity (`#object[…]`: a fn, a connection pool as a row's default) as its class name so
+      written, a regex as its source, whole whatever the REPL's `*print-length*` /
       `*print-level*`."
      [x]
      (binding [*print-length* nil *print-level* nil *print-meta* false *print-namespace-maps* false]
        (pr-str (clojure.walk/postwalk
                 (fn [x]
-                  (let [x (if (fn? x) (symbol (.getName (class x))) x)]
+                  (let [x (if (and (some? x) (not (coll? x)) (not (string? x)) (not (keyword? x))
+                                   (not (symbol? x)) (not (number? x)) (not (boolean? x))
+                                   (clojure.string/starts-with? (pr-str x) "#object["))
+                            (symbol (.getName (class x)))
+                            x)]
                     (if-let [[_ stem] (and (symbol? x) (re-matches #"(.*?)__\d+(?:__auto__)?#?" (name x)))]
                       (symbol (namespace x) (str stem "__#"))
                       x)))
