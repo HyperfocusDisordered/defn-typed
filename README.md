@@ -616,14 +616,16 @@ win over the project's.
   type-checked as it loads (see Typed Clojure): `:warn` prints each finding, `:error` fails the
   load, `:off` checks nothing. A check runs up to 2 s per definition; the first one loads the
   checker (seconds).
-- `:typed-check-cache` (Clojure, `:dev` on): `:on` keeps the fingerprint of every Typed Clojure
-  check that found nothing, and a definition whose fingerprint was green before is not checked
-  again. The fingerprint covers the definition's form, its schema, the schemas of the functions
-  it calls (a callee's changed schema re-checks its callers), and the versions of Typed Clojure and
-  defn-typed. Green fingerprints are kept on disk in `.defn-typed/typed-check-greens.txt` under
-  the JVM's working directory (add `.defn-typed/` to `.gitignore`); a check with a finding always
-  runs again. It covers the type check only: which tests re-run is the test runner's business.
-  `:off` neither reads nor writes the file.
+- `:typed-check-cache` (Clojure, `:dev` on): `:on` keeps the outcome of each Typed Clojure check
+  under the check's fingerprint, and a definition whose fingerprint has a kept outcome is not
+  checked again: no finding counts as checked clean, findings print the same `WARNING` lines (or
+  fail the load under `:typed-check :error`), a skip prints the same `skipped` line. The
+  fingerprint covers the definition's form, its schema, the schemas of the functions it calls (a
+  callee's changed schema re-checks its callers), and the versions of Typed Clojure and
+  defn-typed. Outcomes are kept on disk in `.defn-typed/typed-check-outcomes.txt` under the JVM's
+  working directory (add `.defn-typed/` to `.gitignore`); a load whose every definition has a kept
+  outcome does not load Typed Clojure at all. It covers the type check only: which tests re-run is
+  the test runner's business. `:off` neither reads nor writes the file.
 - `:inout-check` (dev builds): the `defmeta` cases run as the definition loads: `:warn` prints one
   line per failing case, `:error` fails the load, `:off` runs nothing.
 - `:report-success`: after a file loads (`require`, `load-file`, an editor's load-file), one line

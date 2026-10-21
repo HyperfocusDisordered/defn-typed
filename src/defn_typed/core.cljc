@@ -1412,105 +1412,144 @@
        (digest-hex "SHA-1" (stable-text [form (:malli/schema (meta v)) callees @checker-identity])))))
 
 #?(:clj
-   (defn- greens-file
-     "Where the green fingerprints are kept: `.defn-typed/typed-check-greens.txt` under the JVM's
+   (defn- outcomes-file
+     "Where the check outcomes are kept: `.defn-typed/typed-check-outcomes.txt` under the JVM's
       working directory."
      ^java.io.File []
-     (java.io.File. (System/getProperty "user.dir") ".defn-typed/typed-check-greens.txt")))
+     (java.io.File. (System/getProperty "user.dir") ".defn-typed/typed-check-outcomes.txt")))
 
 #?(:clj
-   (defn- read-greens
-     "The fingerprints greens-file holds, one per line: a set; #{} when the file is absent or
-      cannot be read, and, after one line on stderr, when a line is not a fingerprint."
+   (defn- read-outcomes
+     "The outcomes outcomes-file holds, one `<fingerprint>\t<edn of the outcome>` per line: a map
+      fingerprint → outcome; {} when the file is absent or cannot be read, and, after one line on
+      stderr, when a line is not such an entry."
      []
      (try
-       (let [lines (remove clojure.string/blank? (clojure.string/split-lines (slurp (greens-file))))]
-         (if (every? #(re-matches #"[0-9a-f]{40}" %) lines)
-           (set lines)
+       (let [entries (for [entry (remove clojure.string/blank? (clojure.string/split-lines (slurp (outcomes-file))))
+                           :let [[_ fingerprint text] (re-matches #"([0-9a-f]{40})\t(.+)" entry)
+                                 outcome (try (some-> text clojure.edn/read-string) (catch Exception _ nil))]]
+                       (when (and (vector? outcome) (#{:findings :skipped} (first outcome)))
+                         [fingerprint outcome]))]
+         (if (every? some? entries)
+           (into {} entries)
            (do (print-err! "defn-typed: typed-check cache unreadable — rebuilding")
-               #{})))
-       (catch java.io.IOException _ #{}))))
+               {})))
+       (catch java.io.IOException _ {}))))
 
 #?(:clj
    (defonce ^{:private true
-              :doc "The green fingerprints (check-fingerprint) this JVM knows: nil until the first check
-      reads greens-file, then a set that each green check adds to."}
-     typed-check-greens
+              :doc "`{<fingerprint> <outcome>}`: the outcome of each check (check-fingerprint) this JVM
+      knows, as kept-outcome writes it: nil until the first check reads outcomes-file."}
+     typed-check-outcomes
      (atom nil)))
 
 #?(:clj
-   (defn- greens
-     "typed-check-greens, read from greens-file on the first call."
+   (defn- outcomes
+     "typed-check-outcomes, read from outcomes-file on the first call."
      []
-     (or @typed-check-greens
-         (locking typed-check-greens
-           (or @typed-check-greens (reset! typed-check-greens (read-greens)))))))
+     (or @typed-check-outcomes
+         (locking typed-check-outcomes
+           (or @typed-check-outcomes (reset! typed-check-outcomes (read-outcomes)))))))
+
+#?(:clj
+   (defn- kept-outcome
+     "The outcome of a check (typed-findings: `[:findings [finding …]]`, `[:skipped reason]`) as
+      it is kept: a finding's file `:own` when it is the definition's file, and its line as
+      `:line-offset` from the line of the definition's form, so the same form at another line
+      (code added above it) gets its findings at the lines a check would give them now."
+     [{:keys [outcome file line]}]
+     (let [[kind findings] outcome]
+       (if (= :findings kind)
+         [kind (mapv (fn [finding]
+                       (cond-> finding
+                         (and line (:line finding) (contains? #{nil file} (:file finding)))
+                         (-> (dissoc :line) (assoc :line-offset (- (:line finding) line)))
+                         (= file (:file finding)) (assoc :file :own)))
+                     findings)]
+         outcome))))
+
+#?(:clj
+   (defn- replayed-outcome
+     "The outcome kept-outcome kept, for the definition's form at line of file now."
+     [{:keys [outcome file line]}]
+     (let [[kind findings] outcome]
+       (if (= :findings kind)
+         [kind (mapv (fn [finding]
+                       (cond-> finding
+                         (= :own (:file finding)) (assoc :file file)
+                         (contains? finding :line-offset) (-> (dissoc :line-offset)
+                                                              (assoc :line (+ line (:line-offset finding))))))
+                     findings)]
+         outcome))))
 
 #?(:clj
    (defonce ^{:private true
-              :doc "Rewrites greens-file off the load thread, one write at a time; its state = the set
+              :doc "Rewrites outcomes-file off the load thread, one write at a time; its state = the map
       last written, so a write queued behind a newer one does nothing."}
-     greens-writer
+     outcomes-writer
      (agent nil)))
 
 #?(:clj
-   (defonce ^:private greens-write-failed
-     ;; a failed write of greens-file is printed once per JVM
+   (defonce ^:private outcomes-write-failed
+     ;; a failed write of outcomes-file is printed once per JVM
      (atom false)))
 
 #?(:clj
-   (defonce ^:private greens-executor
+   (defonce ^:private outcomes-executor
      ;; the writer's one daemon thread: the default send-off pool's threads would keep a JVM that is
      ;; done alive for a minute. Its shutdown hook lets the last write finish before the JVM exits.
      (delay
        (let [executor (java.util.concurrent.Executors/newSingleThreadExecutor
                        (reify java.util.concurrent.ThreadFactory
                          (newThread [_ runnable]
-                           (doto (Thread. ^Runnable runnable "defn-typed-greens-writer")
+                           (doto (Thread. ^Runnable runnable "defn-typed-outcomes-writer")
                              (.setDaemon true)))))]
          (.addShutdownHook (Runtime/getRuntime)
                            (Thread. ^Runnable (fn []
                                                 (let [done (promise)]
-                                                  (send-via executor greens-writer (fn [written] (deliver done true) written))
+                                                  (send-via executor outcomes-writer (fn [written] (deliver done true) written))
                                                   (deref done 5000 nil)))))
          executor))))
 
 #?(:clj
-   (defn- write-greens!
-     "The writer's action: writes typed-check-greens, sorted, one per line, to a temporary file
-      beside greens-file and renames it over greens-file (a reader sees the old file or the new
-      one). Returns the set written."
+   (defn- write-outcomes!
+     "The writer's action: writes typed-check-outcomes, one `<fingerprint>\t<edn>` line per entry
+      sorted by fingerprint, to a temporary file beside outcomes-file and renames it over
+      outcomes-file (a reader sees the old file or the new one). Returns the map written."
      [written]
-     (let [now @typed-check-greens]
+     (let [now @typed-check-outcomes]
        (if (or (nil? now) (identical? now written))
          written
          (try
-           (let [file (greens-file)
+           (let [file (outcomes-file)
                  dir (doto (.getParentFile file) .mkdirs)
-                 tmp (java.io.File/createTempFile "typed-check-greens" ".tmp" dir)]
-             (spit tmp (apply str (map #(str % "\n") (sort now))))
+                 tmp (java.io.File/createTempFile "typed-check-outcomes" ".tmp" dir)]
+             (binding [*print-length* nil *print-level* nil *print-meta* false *print-namespace-maps* false]
+               (spit tmp (apply str (for [[fingerprint outcome] (sort-by key now)]
+                                      (str fingerprint "\t" (pr-str outcome) "\n")))))
              (java.nio.file.Files/move (.toPath tmp) (.toPath file)
                                        (into-array java.nio.file.CopyOption
                                                    [java.nio.file.StandardCopyOption/ATOMIC_MOVE
                                                     java.nio.file.StandardCopyOption/REPLACE_EXISTING]))
              now)
            (catch Exception e
-             (when (compare-and-set! greens-write-failed false true)
-               (print-err! (str "defn-typed: writing " (.getPath (greens-file)) " failed: " (innermost-message e))))
+             (when (compare-and-set! outcomes-write-failed false true)
+               (print-err! (str "defn-typed: writing " (.getPath (outcomes-file)) " failed: " (innermost-message e))))
              written))))))
 
 #?(:clj
-   (defn- keep-green!
-     "Adds fingerprint to typed-check-greens and queues the rewrite of greens-file."
-     [fingerprint]
-     (swap! typed-check-greens (fnil conj #{}) fingerprint)
-     (send-via @greens-executor greens-writer write-greens!)))
+   (defn- keep-outcome!
+     "Adds fingerprint → outcome (kept-outcome) to typed-check-outcomes and queues the rewrite of
+      outcomes-file."
+     [fingerprint outcome]
+     (swap! typed-check-outcomes assoc fingerprint outcome)
+     (send-via @outcomes-executor outcomes-writer write-outcomes!)))
 
 #?(:clj
    (defonce ^{:private true
-              :doc "The defn-typed functions whose check this JVM found green (check-fingerprint), so the
-      checker has not met them: typed-check! makes it know them (install-fn!) before the next check
-      it runs, as a check would have."}
+              :doc "The defn-typed functions whose check outcome this JVM replayed (check-fingerprint),
+      so the checker has not met them: typed-check! makes it know them (install-fn!) before the
+      next check it runs, as their checks would have."}
      uninstalled
      (atom #{})))
 
@@ -1520,7 +1559,8 @@
      []
      (let [install-fn! (deref (resolve 'defn-typed.typed-clojure/install-fn!))]
        (doseq [v (first (swap-vals! uninstalled empty))]
-         ;; its green check installed this same definition: nothing new can fail here
+         ;; the check that produced its kept outcome installed this same definition (a failed
+         ;; install is never kept): nothing new can fail here
          (try (install-fn! {:fn-var v}) (catch Throwable _ nil))))))
 
 #?(:clj
@@ -1538,11 +1578,13 @@
       function), `:error` throws an ex-info of those lines without `WARNING ` (the load fails). A
       check past the deadline prints `defn-typed: Typed Clojure check of <f> skipped (over 2 s)`
       and one whose checker overflowed its stack `… skipped (StackOverflowError)`. Nothing while
-      defn-typed.typed-clojure itself loads. With `:typed-check-cache :on` (the default) a check
-      whose fingerprint (check-fingerprint) was green before, in this JVM or one that wrote
-      greens-file, does not run: the schemas are judged, the function counts as checked clean,
-      and the checker meets it before the next check that runs (uninstalled); a check with no
-      finding keeps its fingerprint (keep-green!). Returns v."
+      defn-typed.typed-clojure itself loads. With `:typed-check-cache :on` (the default) the
+      outcome of each check (no finding, its findings, skipped; not a failed one) is kept under
+      its fingerprint (check-fingerprint, keep-outcome!), and a definition whose fingerprint has a
+      kept outcome, from this JVM or one that wrote outcomes-file, is not checked: the schemas are
+      judged and the outcome is reported as a check would report it (replayed-outcome), the
+      checker untouched (it meets the function before the next check that runs: uninstalled).
+      Returns v."
      [v mode line]
      (let [f (symbol v)
            form (get (first (swap-vals! typed-forms dissoc f)) f)
@@ -1550,32 +1592,36 @@
            file *file*]
        (when (and form (not= :off mode) (not (loading? 'defn-typed.typed-clojure)))
          (let [fingerprint (when (= :on (setting :typed-check-cache))
-                             (check-fingerprint {:v v :form form}))]
-           (if (and fingerprint (contains? (greens) fingerprint))
-             (do (check-var-schemas! v)
-                 (swap! uninstalled conj v)
-                 (update-load-report! (symbol (namespace f)) #(update % :typed-ok conj f)))
-             (when @typed-bridge-loaded
-               (check-var-schemas! v)
-               (install-uninstalled!)
-               (let [[kind findings] (typed-findings {:v v :form form :file file})]
-                 (update-load-report! (symbol (namespace f))
-                                      (case kind
-                                        :findings (if (seq findings) #(assoc % :failed true) #(update % :typed-ok conj f))
-                                        :failed #(assoc % :failed true)
-                                        ;; over the deadline or out of stack: not checked, not failed
-                                        :skipped identity))
-                 (when (and fingerprint (= :findings kind) (empty? findings))
-                   (keep-green! fingerprint))
-                 (case kind
-                   :skipped (print-err! (str "defn-typed: Typed Clojure check of " f " skipped (" findings ")"))
-                   :failed (print-err! (str "defn-typed: Typed Clojure check of " f " failed: " findings))
-                   :findings (when (seq findings)
-                               (let [texts (for [{:keys [message] :as finding} findings]
-                                             (str "defn-typed " (or (:file finding) file) ":" (or (:line finding) line) " " message))]
-                                 (if (= :error mode)
-                                   (throw (ex-info (clojure.string/join "\n" texts) {:type ::typed-check ::typed-findings (vec findings)}))
-                                   (doseq [text texts] (print-err! (str "WARNING " text))))))))))))
+                             (check-fingerprint {:v v :form form}))
+               kept (when fingerprint (get (outcomes) fingerprint))
+               outcome (if kept
+                         (do (check-var-schemas! v)
+                             (swap! uninstalled conj v)
+                             (replayed-outcome {:outcome kept :file file :line line}))
+                         (when @typed-bridge-loaded
+                           (check-var-schemas! v)
+                           (install-uninstalled!)
+                           (let [outcome (typed-findings {:v v :form form :file file})]
+                             ;; a failed one says nothing about the code: checked again next time
+                             (when (and fingerprint (not= :failed (first outcome)))
+                               (keep-outcome! fingerprint (kept-outcome {:outcome outcome :file file :line line})))
+                             outcome)))]
+           (when-let [[kind findings] outcome]
+             (update-load-report! (symbol (namespace f))
+                                  (case kind
+                                    :findings (if (seq findings) #(assoc % :failed true) #(update % :typed-ok conj f))
+                                    :failed #(assoc % :failed true)
+                                    ;; over the deadline or out of stack: not checked, not failed
+                                    :skipped identity))
+             (case kind
+               :skipped (print-err! (str "defn-typed: Typed Clojure check of " f " skipped (" findings ")"))
+               :failed (print-err! (str "defn-typed: Typed Clojure check of " f " failed: " findings))
+               :findings (when (seq findings)
+                           (let [texts (for [{:keys [message] :as finding} findings]
+                                         (str "defn-typed " (or (:file finding) file) ":" (or (:line finding) line) " " message))]
+                             (if (= :error mode)
+                               (throw (ex-info (clojure.string/join "\n" texts) {:type ::typed-check ::typed-findings (vec findings)}))
+                               (doseq [text texts] (print-err! (str "WARNING " text))))))))))
        v)))
 
 #?(:clj
