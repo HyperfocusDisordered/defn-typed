@@ -5,3 +5,4 @@ node_modules/
 .cache/
 .nrepl-port
 target/
+.defn-typed/

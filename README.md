@@ -564,6 +564,7 @@ first macroexpansion; no file = the defaults.
  :inline         true    ; true (default) | false
  :stale-callers  :warn   ; :warn (default) | :reload | :off
  :typed-check    :warn   ; :warn (default) | :error | :off
+ :typed-check-cache :on  ; :on (default) | :off
  :inout-check    :warn   ; :warn (default) | :error | :off
  :report-success false}  ; false (default) | true
 ```
@@ -576,6 +577,7 @@ first macroexpansion; no file = the defaults.
 | `:inline` | `true` | Clojure (ClojureScript: release builds) | each call site's compile | — |
 | `:stale-callers` | `:warn` | Clojure, `:dev` on | at a redefinition (run time) | — |
 | `:typed-check` | `:warn` | Clojure, `:dev` on, Typed Clojure on the classpath | the definition's load | yes |
+| `:typed-check-cache` | `:on` | Clojure, `:dev` on, Typed Clojure on the classpath | the definition's load | — |
 | `:inout-check` | `:warn` | dev builds | the definition's expansion | yes |
 | `:report-success` | `false` | Clojure, `:dev` on | each file load (run time) | — |
 
@@ -614,6 +616,16 @@ win over the project's.
   type-checked as it loads (see Typed Clojure): `:warn` prints each finding, `:error` fails the
   load, `:off` checks nothing. A check runs up to 2 s per definition; the first one loads the
   checker (seconds).
+- `:typed-check-cache` (Clojure, `:dev` on): `:on` keeps the outcome of each Typed Clojure check
+  under the check's fingerprint, and a definition whose fingerprint has a kept outcome is not
+  checked again: no finding counts as checked clean, findings print the same `WARNING` lines (or
+  fail the load under `:typed-check :error`), a skip prints the same `skipped` line. The
+  fingerprint covers the definition's form, its schema, the schemas of the functions it calls (a
+  callee's changed schema re-checks its callers), and the versions of Typed Clojure and
+  defn-typed. Outcomes are kept on disk in `.defn-typed/typed-check-outcomes.txt` under the JVM's
+  working directory (add `.defn-typed/` to `.gitignore`); a load whose every definition has a kept
+  outcome does not load Typed Clojure at all. It covers the type check only: which tests re-run is
+  the test runner's business. `:off` neither reads nor writes the file.
 - `:inout-check` (dev builds): the `defmeta` cases run as the definition loads: `:warn` prints one
   line per failing case, `:error` fails the load, `:off` runs nothing.
 - `:report-success`: after a file loads (`require`, `load-file`, an editor's load-file), one line
@@ -636,8 +648,8 @@ A JVM system property `-Ddefn-typed.<key>` wins over the file, the file over the
 `-Ddefn-typed.dev=true` and `-Ddefn-typed.report-success=true` (any other value is off),
 `-Ddefn-typed.inline=false` (any other value is on), `-Ddefn-typed.literal-check`,
 `-Ddefn-typed.unknown-keys`, `-Ddefn-typed.typed-check` and `-Ddefn-typed.inout-check` `=warn|error|off`,
-`-Ddefn-typed.stale-callers=warn|reload|off`. ClojureScript reads the same file and properties in
-the compiler's JVM. An unknown key, or a value outside its list, is an error naming the key and
+`-Ddefn-typed.stale-callers=warn|reload|off`, `-Ddefn-typed.typed-check-cache=on|off`.
+ClojureScript reads the same file and properties in the compiler's JVM. An unknown key, or a value outside its list, is an error naming the key and
 the allowed values.
 
 Strict mode, a literal that fails the check does not compile:

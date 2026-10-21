@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 (unreleased)
 
+- Typed Clojure check: the outcome of each check is kept under its fingerprint, and a definition
+  whose fingerprint has a kept outcome is not checked again (`:typed-check-cache`, default `:on`):
+  no finding counts as clean, findings print the same `WARNING` lines (`:error` fails the load
+  with them), a skip prints the same `skipped` line. The fingerprint = the form, its schema, the
+  schemas of the functions it calls, Typed Clojure's and defn-typed's versions; outcomes are kept
+  on disk in `.defn-typed/typed-check-outcomes.txt` under the working directory (gitignore
+  `.defn-typed/`). A warm load of an unchanged project runs no check and does not load Typed
+  Clojure; a callee's changed schema re-checks its callers. `-Ddefn-typed.typed-check-cache=off`
+  (or `:typed-check-cache :off` in `defn-typed.edn`) reads and writes nothing.
 - docs: tagline on README/pom/GitHub, one arity by design.
 - malli floor measured: every suite passes on malli 0.16.3 and later; the 0.3.2 README's 0.11.0
   was wrong (the clj suite fails below 0.16.3).

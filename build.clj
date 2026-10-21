@@ -9,7 +9,7 @@
 (xml/alias-uri 'pom "http://maven.apache.org/POM/4.0.0")
 
 (def lib 'io.github.hyperfocusdisordered/defn-typed)
-(def version "0.3.2")
+(def version "0.3.3")
 (def class-dir "target/classes")
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
 (def url "https://github.com/HyperfocusDisordered/defn-typed")
