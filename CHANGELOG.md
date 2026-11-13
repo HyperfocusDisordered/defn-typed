@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.4 (2026-11-13)
+
+- `defn-typed.kondo`: a row typed by a defn-typed function's `<name>-props` var
+  (`:chips [:sequential chip-props]`), in the same namespace or `:refer`red from another, resolves
+  to that function's input rows, as a row typed by a top-level `def` does. The emitter used to meet
+  the bare symbol, malli threw `:malli.core/invalid-schema`, and the whole emit failed: a hook
+  calling `emit!` after each edit reported an error and no function's types were refreshed.
+- Typed Clojure check cache: a skipped check (past its deadline, or the checker overflowing its
+  stack) is no outcome and is not kept. 0.3.3 wrote it to `.defn-typed/typed-check-outcomes.txt`
+  and replayed it, so the definition was never checked again until its form changed; now the next
+  load checks it again (a definition whose checker overflows prints its skip line on each load). A
+  `[:skipped …]` row in a file 0.3.3 wrote is left out when the file is read, with no message.
+
 ## 0.3.3 (2026-10-22)
 
 - Typed Clojure check: the outcome of each check is kept under its fingerprint, and a definition
