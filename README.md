@@ -619,10 +619,11 @@ win over the project's.
 - `:typed-check-cache` (Clojure, `:dev` on): `:on` keeps the outcome of each Typed Clojure check
   under the check's fingerprint, and a definition whose fingerprint has a kept outcome is not
   checked again: no finding counts as checked clean, findings print the same `WARNING` lines (or
-  fail the load under `:typed-check :error`), a skip prints the same `skipped` line. The
-  fingerprint covers the definition's form, its schema, the schemas of the functions it calls (a
-  callee's changed schema re-checks its callers), and the versions of Typed Clojure and
-  defn-typed. Outcomes are kept on disk in `.defn-typed/typed-check-outcomes.txt` under the JVM's
+  fail the load under `:typed-check :error`). A skipped check (past its deadline, or the checker
+  overflowing its stack) is no outcome and is not kept: the definition is checked again on the
+  next load. The fingerprint covers the definition's form, its schema, the schemas of the
+  functions it calls (a callee's changed schema re-checks its callers), and the versions of Typed
+  Clojure and defn-typed. Outcomes are kept on disk in `.defn-typed/typed-check-outcomes.txt` under the JVM's
   working directory (add `.defn-typed/` to `.gitignore`); a load whose every definition has a kept
   outcome does not load Typed Clojure at all. It covers the type check only: which tests re-run is
   the test runner's business. `:off` neither reads nor writes the file.

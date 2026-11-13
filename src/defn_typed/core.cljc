@@ -1422,7 +1422,8 @@
    (defn- read-outcomes
      "The outcomes outcomes-file holds, one `<fingerprint>\t<edn of the outcome>` per line: a map
       fingerprint → outcome; {} when the file is absent or cannot be read, and, after one line on
-      stderr, when a line is not such an entry."
+      stderr, when a line is not such an entry. A `[:skipped …]` entry (0.3.3 kept them) is a
+      check that did not finish, not an outcome: left out without a word."
      []
      (try
        (let [entries (for [entry (remove clojure.string/blank? (clojure.string/split-lines (slurp (outcomes-file))))
@@ -1431,7 +1432,7 @@
                        (when (and (vector? outcome) (#{:findings :skipped} (first outcome)))
                          [fingerprint outcome]))]
          (if (every? some? entries)
-           (into {} entries)
+           (into {} (filter (fn [[_ outcome]] (= :findings (first outcome)))) entries)
            (do (print-err! "defn-typed: typed-check cache unreadable — rebuilding")
                {})))
        (catch java.io.IOException _ {}))))
@@ -1453,10 +1454,10 @@
 
 #?(:clj
    (defn- kept-outcome
-     "The outcome of a check (typed-findings: `[:findings [finding …]]`, `[:skipped reason]`) as
-      it is kept: a finding's file `:own` when it is the definition's file, and its line as
-      `:line-offset` from the line of the definition's form, so the same form at another line
-      (code added above it) gets its findings at the lines a check would give them now."
+     "The outcome of a check (typed-findings: `[:findings [finding …]]`) as it is kept: a finding's
+      file `:own` when it is the definition's file, and its line as `:line-offset` from the line of
+      the definition's form, so the same form at another line (code added above it) gets its
+      findings at the lines a check would give them now."
      [{:keys [outcome file line]}]
      (let [[kind findings] outcome]
        (if (= :findings kind)
@@ -1577,10 +1578,11 @@
       (the message led by `input of <f>: ` / `output of <f>: ` when it is about a defn-typed
       function), `:error` throws an ex-info of those lines without `WARNING ` (the load fails). A
       check past the deadline prints `defn-typed: Typed Clojure check of <f> skipped (over 2 s)`
-      and one whose checker overflowed its stack `… skipped (StackOverflowError)`. Nothing while
-      defn-typed.typed-clojure itself loads. With `:typed-check-cache :on` (the default) the
-      outcome of each check (no finding, its findings, skipped; not a failed one) is kept under
-      its fingerprint (check-fingerprint, keep-outcome!), and a definition whose fingerprint has a
+      and one whose checker overflowed its stack `… skipped (StackOverflowError)`; a skip is not
+      kept: the next load checks the definition again. Nothing while defn-typed.typed-clojure
+      itself loads. With `:typed-check-cache :on` (the default) the outcome of each check (no
+      finding, its findings; not a failed or skipped one) is kept under its fingerprint
+      (check-fingerprint, keep-outcome!), and a definition whose fingerprint has a
       kept outcome, from this JVM or one that wrote outcomes-file, is not checked: the schemas are
       judged and the outcome is reported as a check would report it (replayed-outcome), the
       checker untouched (it meets the function before the next check that runs: uninstalled).
@@ -1602,8 +1604,9 @@
                            (check-var-schemas! v)
                            (install-uninstalled!)
                            (let [outcome (typed-findings {:v v :form form :file file})]
-                             ;; a failed one says nothing about the code: checked again next time
-                             (when (and fingerprint (not= :failed (first outcome)))
+                             ;; a failed or skipped one says nothing about the code (a skip is a
+                             ;; deadline met on this JVM, this machine's load): checked again next time
+                             (when (and fingerprint (= :findings (first outcome)))
                                (keep-outcome! fingerprint (kept-outcome {:outcome outcome :file file :line line})))
                              outcome)))]
            (when-let [[kind findings] outcome]

@@ -1,8 +1,9 @@
 (ns defn-typed.typed-check-outcomes-test
   "`:typed-check-cache :on`: a definition whose check fingerprint (own form, own schema, the
    schemas of the functions it calls, the checker's and defn-typed's versions) has a kept outcome
-   is not checked again: the outcome (no finding, the findings, skipped) is reported as the check
-   reported it. Outcomes are kept in `.defn-typed/typed-check-outcomes.txt` (here a temp file).
+   is not checked again: the outcome (no finding, the findings) is reported as the check reported
+   it; a skipped check (past its deadline) is not an outcome and runs again. Outcomes are kept in
+   `.defn-typed/typed-check-outcomes.txt` (here a temp file).
    The `:typed` alias runs the other suites with the cache off."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
@@ -137,20 +138,42 @@
                (is (= (ex-message live) (ex-message replayed)))
                (is (= (ex-data live) (ex-data replayed)))))))))))
 
-(deftest skipped-is-replayed
-  (testing "a check past its deadline: the next definition prints the same skip line, no checker"
+(deftest skipped-is-not-an-outcome
+  (testing "a check past its deadline: nothing is kept, so the next definition is checked again and may finish"
     (with-cache :on
-      (fn [_]
+      (fn [file]
         (let [check-form! @#'defn-typed.typed-clojure/check-form!
-              calls (atom 0)]
+              calls (atom 0)
+              slow '(defn-typed slow {:n :int} -> :int (inc n))]
           (with-redefs [defn-typed.core/typed-check-ms 200
                         defn-typed.typed-clojure/check-form! (fn [m] (swap! calls inc) (Thread/sleep 1000) (check-form! m))]
-            (let [slow '(defn-typed slow {:n :int} -> :int (inc n))
-                  first-out (define! slow)
-                  second-out (define! slow)]
-              (is (= "defn-typed: Typed Clojure check of defn-typed.outcomes-scratch/slow skipped (over 0 s)\n" first-out))
-              (is (= first-out second-out))
-              (is (= 1 @calls)))))))))
+            (is (= "defn-typed: Typed Clojure check of defn-typed.outcomes-scratch/slow skipped (over 0 s)\n" (define! slow)))
+            (is (= "defn-typed: Typed Clojure check of defn-typed.outcomes-scratch/slow skipped (over 0 s)\n" (define! slow)))
+            (is (= 2 @calls) "the second definition was checked, not replayed")
+            (writer-idle!)
+            (is (not (.exists ^java.io.File file)) "no skip was written"))
+          (is (= "" (define! slow)) "the deadline met this time: the check runs and is green"))))))
+
+(deftest a-skipped-row-in-the-file-is-not-a-hit
+  (testing "outcomes-file written by 0.3.3 holds `[:skipped …]` rows: read without the unreadable-line, never replayed; the findings rows beside them are"
+    (with-cache :on
+      (fn [file]
+        (counting
+         (fn [calls]
+           (define! '(defn-typed fits {:n :int} -> :int (inc n)))
+           (define! '(defn-typed shout {:n :int} -> :string n))
+           (writer-idle!)
+           (is (= 2 @calls))
+           (let [lines (str/split-lines (slurp file))
+                 fits-line (first (filter #(str/ends-with? % "[:findings []]") lines))
+                 shout-line (first (remove #(= fits-line %) lines))]
+             (is (and fits-line shout-line) (pr-str lines))
+             (spit file (str (str/replace fits-line "[:findings []]" "[:skipped \"over 2 s\"]") "\n" shout-line "\n")))
+           (reset! @#'defn-typed.core/typed-check-outcomes nil)
+           (is (= "" (define! '(defn-typed fits {:n :int} -> :int (inc n)))) "no skip line, no unreadable line")
+           (is (= 3 @calls) "the form with the skipped row was checked again")
+           (define! '(defn-typed shout {:n :int} -> :string n))
+           (is (= 3 @calls) "the form with the findings row was replayed")))))))
 
 (deftest outcomes-on-disk
   (testing "each outcome is written as `<fingerprint>\t<edn>`; a JVM that reads the file replays it"
