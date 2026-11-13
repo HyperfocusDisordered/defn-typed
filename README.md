@@ -181,10 +181,11 @@ empty.
 
 clj-kondo loads a config under `.clj-kondo/imports/` with no further setting; another path needs
 `:config-paths`. In a schema, a symbol naming a top-level `def` of the same namespace (or of the
-namespace it is `:refer`red from) stands for that def's value, and `[:fn …]` for `:any`. The
-output is canonical (every map sorted by key) and the file is written only when its text changes,
-so the same sources leave it, and its git diff, alone; `:written? false` says so. malli's global
-function-schema registry is not touched, so a REPL's own registrations stay as they are.
+namespace it is `:refer`red from), a defn-typed function's `<name>-props` included, stands for that
+def's value, and `[:fn …]` for `:any`. The output is canonical (every map sorted by key) and the
+file is written only when its text changes, so the same sources leave it, and its git diff, alone;
+`:written? false` says so. malli's global function-schema registry is not touched, so a REPL's own
+registrations stay as they are.
 
 Optional speed-up: in a running REPL, `(defn-typed.kondo/emit! {:src-dirs ["src" "test"] :out
 ".clj-kondo/imports/defn-typed/types/config.edn"})` writes the same file without a JVM start and
