@@ -1422,8 +1422,7 @@
    (defn- read-outcomes
      "The outcomes outcomes-file holds, one `<fingerprint>\t<edn of the outcome>` per line: a map
       fingerprint → outcome; {} when the file is absent or cannot be read, and, after one line on
-      stderr, when a line is not such an entry. A `[:skipped …]` entry (0.3.3 kept them) is a
-      check that did not finish, not an outcome: left out without a word."
+      stderr, when a line is not such an entry."
      []
      (try
        (let [entries (for [entry (remove clojure.string/blank? (clojure.string/split-lines (slurp (outcomes-file))))
@@ -1432,7 +1431,7 @@
                        (when (and (vector? outcome) (#{:findings :skipped} (first outcome)))
                          [fingerprint outcome]))]
          (if (every? some? entries)
-           (into {} (filter (fn [[_ outcome]] (= :findings (first outcome)))) entries)
+           (into {} entries)
            (do (print-err! "defn-typed: typed-check cache unreadable — rebuilding")
                {})))
        (catch java.io.IOException _ {}))))
@@ -1595,7 +1594,10 @@
        (when (and form (not= :off mode) (not (loading? 'defn-typed.typed-clojure)))
          (let [fingerprint (when (= :on (setting :typed-check-cache))
                              (check-fingerprint {:v v :form form}))
-               kept (when fingerprint (get (outcomes) fingerprint))
+               ;; a `[:skipped …]` (an older file, other code's keep-outcome!) is a check that did
+               ;; not finish, not an outcome
+               kept (when fingerprint (let [outcome (get (outcomes) fingerprint)]
+                                        (when (= :findings (first outcome)) outcome)))
                outcome (if kept
                          (do (check-var-schemas! v)
                              (swap! uninstalled conj v)

@@ -175,6 +175,19 @@
            (define! '(defn-typed shout {:n :int} -> :string n))
            (is (= 3 @calls) "the form with the findings row was replayed")))))))
 
+(deftest a-skipped-outcome-put-into-the-outcomes-is-not-a-hit
+  (testing "code that puts `[:skipped …]` under a fingerprint (the after-edit hook of a project does) leaves the next load checking the definition"
+    (with-cache :on
+      (fn [_]
+        (counting
+         (fn [calls]
+           (define! '(defn-typed fits {:n :int} -> :int (inc n)))
+           (let [fingerprint (first (keys @@#'defn-typed.core/typed-check-outcomes))]
+             (is (some? fingerprint))
+             (#'defn-typed.core/keep-outcome! fingerprint [:skipped "over 2 s"]))
+           (is (= "" (define! '(defn-typed fits {:n :int} -> :int (inc n)))))
+           (is (= 2 @calls) "checked again, not replayed as a skip")))))))
+
 (deftest outcomes-on-disk
   (testing "each outcome is written as `<fingerprint>\t<edn>`; a JVM that reads the file replays it"
     (with-cache :on
