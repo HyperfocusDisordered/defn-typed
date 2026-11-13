@@ -11,8 +11,9 @@
   stack) is no outcome and is not kept. 0.3.3 wrote it to `.defn-typed/typed-check-outcomes.txt`
   and replayed it, so the definition was never checked again until its form changed; now the next
   load checks it again (a definition whose checker overflows prints its skip line on each load). A
-  `[:skipped …]` row in a file 0.3.3 wrote is no hit either: that definition is checked again and
-  its row replaced.
+  `[:skipped …]` row in the outcomes file is ignored at lookup, so that definition is checked
+  again; rows an earlier version wrote never match (the fingerprint includes defn-typed's version)
+  and stay in the file, unused.
 
 ## 0.3.3 (2026-10-22)
 
