@@ -7,6 +7,8 @@
             [defn-typed.kondo :as kondo]
             [kondo-fixture.order]
             [kondo-fixture.shape]
+            [kondo-props-fixture.chip]
+            [kondo-props-fixture.rail]
             [malli.clj-kondo :as mc]
             [malli.core :as m]))
 
@@ -29,6 +31,20 @@
             (a row typed by a def carrying :default is optional, as the macro marks it)"
     (let [config (edn/read-string (slurp (io/file fixture-dir "expected-config.edn")))]
       (doseq [v [#'kondo-fixture.order/order-total #'kondo-fixture.shape/moved]
+              :let [{:keys [ns name]} (meta v)
+                    [loaded] (mc/from {:ns (ns-name ns) :name name :schema (m/function-schema (:malli/schema (meta v)))})]]
+        (is (= (select-keys loaded [:args :ret])
+               (get-in config [:linters :type-mismatch :namespaces (ns-name ns) name :arities 1]))
+            (str (symbol v)))))))
+
+(deftest rows-typed-by-a-functions-props-var
+  (testing "a row typed by `<name>-props` (the var defn-typed defines, in the same ns or :refer'red from another):
+            the emitted arity = malli.clj-kondo over the :malli/schema the macro gave the loaded var"
+    (let [out (str (io/file (temp-dir) "config.edn"))
+          emitted (kondo/emit! {:src-dirs ["test/kondo_props_fixture"] :out out})
+          config (edn/read-string (slurp out))]
+      (is (= {:written? true :fns 3 :out out} emitted))
+      (doseq [v [#'kondo-props-fixture.chip/chips #'kondo-props-fixture.rail/rail]
               :let [{:keys [ns name]} (meta v)
                     [loaded] (mc/from {:ns (ns-name ns) :name name :schema (m/function-schema (:malli/schema (meta v)))})]]
         (is (= (select-keys loaded [:args :ret])

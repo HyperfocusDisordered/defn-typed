@@ -63,13 +63,17 @@
   (some #(when (map? %) (:malli/schema %)) (take-while (complement vector?) (drop 2 form))))
 
 (defn schema-defs
-  "`{ns-sym {def-sym value}}`: every top-level `(def name … value)` of the parsed files, a ns's
-   files (.clj and .cljs of one ns) merged."
+  "`{ns-sym {def-sym value}}`: every top-level `(def name … value)` of the parsed files and the
+   `<name>-props` of every defn-typed form — the var the macro defines, holding the function's input
+   rows (typed-form-schema) — a ns's files (.clj and .cljs of one ns) merged."
   [parsed]
   (apply merge-with merge
-         (for [[ns-sym forms] parsed]
-           {ns-sym (into {} (for [form forms :when (and (seq? form) (= 'def (first form)))]
-                              [(second form) (last form)]))})))
+         (for [[ns-sym forms path] parsed]
+           {ns-sym (into {} (for [form forms
+                                  :when (or (typed-form? form) (and (seq? form) (= 'def (first form))))]
+                              (if (typed-form? form)
+                                [(symbol (str (second form) "-props")) (get-in (typed-form-schema path form) [1 1])]
+                                [(second form) (last form)])))})))
 
 (defn referred-namespaces
   "`{ns-sym {sym home-ns}}`: every symbol a ns form `:refer`s by name (`[home :refer [sym …]]`)."
@@ -86,7 +90,7 @@
                               [sym (first spec)]))})))
 
 (defn resolved-schema
-  "schema of ns-sym with every symbol naming a def of its own ns, else a def of the ns it is
+  "schema of ns-sym with every symbol naming a def (schema-defs) of its own ns, else a def of the ns it is
    `:refer`red from, replaced by that def's value (resolved the same way, at any depth), and every
    `[:fn …]` replaced by `:any`: a cljs predicate cannot run on the JVM, and clj-kondo types `:fn`
    as `:any` anyway. Any other symbol stays (malli's predicate names: `string?`, `pos-int?` …)."
@@ -155,8 +159,8 @@
    defaulted rows optional) and each plain defn / defn- carrying `:malli/schema`, read from the
    source (function-entries) — a .cljs file through its :cljs reader branches, a .clj / .cljc file
    through its :clj ones. In a schema, a symbol naming a top-level def of the same ns (or of the ns
-   it is `:refer`red from) stands for that def's value, and `[:fn …]` for `:any`
-   (resolved-schema); metadata on a defn-typed input map becomes the map's props
+   it is `:refer`red from), a defn-typed function's `<name>-props` included, stands for that def's
+   value, and `[:fn …]` for `:any` (resolved-schema); metadata on a defn-typed input map becomes the map's props
    (typed-form-schema). malli.clj-kondo turns the signatures into config; every map prints sorted
    by key (config-text), so the same sources give the same text, and out is written only when
    that text differs from the file's. malli's global function-schema registry is never touched,
