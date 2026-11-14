@@ -50,15 +50,15 @@ compiles (dev/test/REPL loaders, every ClojureScript build); the loader is in [I
 
 ```clojure
 ;; deps.edn, from Clojars
-{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.3.4"}}
+{:deps {io.github.hyperfocusdisordered/defn-typed {:mvn/version "0.3.5"}}
  :aliases {:dev  {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"]}
            :test {:jvm-opts ["-Ddefn-typed.dev=true" "-Ddefn-typed.inline=false"]}}}
 
 ;; deps.edn, from git
-{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.3.3" :git/sha "a0790ed"}}}
+{:deps {io.github.hyperfocusdisordered/defn-typed {:git/tag "v0.3.4" :git/sha "e1de97b"}}}
 
 ;; shadow-cljs.edn
-{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.3.4"]]}
+{:dependencies [[io.github.hyperfocusdisordered/defn-typed "0.3.5"]]}
 ```
 
 Without `-Ddefn-typed.dev=true` nothing is checked at run time and no example runs, silently:

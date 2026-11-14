@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 (2026-11-14)
 
 - Clojure: a `defn-typed` function of one map adds 108 bytes to its namespace's `load()` method,
   where 0.3.4 added 214 (227 under a `defmeta`). With a `defmeta` above it, 13 of the 108 are the
