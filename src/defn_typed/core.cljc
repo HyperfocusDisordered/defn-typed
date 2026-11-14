@@ -1986,12 +1986,15 @@
       holding these two values is rebuilt value by value in the namespace's `load()`, the one JVM
       method (65535 bytes) an AOT-compiled namespace's forms share. This runs before the next
       form is compiled, so a later call in the namespace is expanded as it would be with both in
-      the defn. Returns v."
+      the defn. A nil out-schema (∨ inline) leaves that key off: the compiler's `:elide-meta` lists
+      it. Returns v."
      [^clojure.lang.Var v out-schema inline]
-     (let [props (.getRawRoot (.findInternedVar (.-ns v) (symbol (str (.-sym v) "-props"))))]
+     (when out-schema
+       (let [props (.getRawRoot (.findInternedVar (.-ns v) (symbol (str (.-sym v) "-props"))))]
+         (alter-meta! v assoc :malli/schema [:=> [:cat props] out-schema])))
+     (when inline
        ;; the expander fn carries the mark `plumbing` puts on a form, at no cost in `load()`
-       (alter-meta! v assoc :malli/schema [:=> [:cat props] out-schema]
-                    :inline (with-meta inline {:typed.clojure/ignore true})))
+       (alter-meta! v assoc :inline (with-meta inline {:typed.clojure/ignore true})))
      v))
 
 #?(:clj
@@ -2131,17 +2134,21 @@
               attrs (if cljs?
                       (merge {:arglists arglists} meta-keys {:malli/schema [:=> [:cat props] out-schema]})
                       (assoc (merge {:arglists arglists} meta-keys) :inline-arities #{1}))
-              attach-call (when-not cljs?
+              ;; a key the compiler's :elide-meta lists stays off the var, as it does off a def's own
+              ;; metadata: decided now, so a class compiled ahead of time attaches what it was compiled with
+              elided (set (:elide-meta *compiler-options*))
+              attach-call (when-not (or cljs? (and (elided :malli/schema) (elided :inline)))
                             [(plumbing
                               `(attach-call-meta!
                                 (var ~fn-name)
-                                ~out-schema
-                                ;; the fallback is a host call on the var's value: no op
-                                ;; position, so it is never expanded again
-                                (fn [arg#]
-                                  (expand-call {:spec '~spec :arg arg# :cljs? false
-                                                :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
-                                                :file *file* :line (deref clojure.lang.Compiler/LINE)}))))])]
+                                ~(when-not (elided :malli/schema) out-schema)
+                                ~(when-not (elided :inline)
+                                   ;; the fallback is a host call on the var's value: no op
+                                   ;; position, so it is never expanded again
+                                   `(fn [arg#]
+                                      (expand-call {:spec '~spec :arg arg# :cljs? false
+                                                    :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
+                                                    :file *file* :line (deref clojure.lang.Compiler/LINE)})))))])]
           (swap! pending-meta dissoc q)
           ;; literal calls compiled before this definition are map calls, reported under
           ;; :literal-check: clj from a `declare` (a plain one, or the defmeta's; the var had no

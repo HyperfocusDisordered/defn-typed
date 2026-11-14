@@ -48,6 +48,24 @@
     (is (= ['.invoke `fx/guarded '{:n 1}] (vec ((:inline (meta #'fx/guarded)) '{:n 1})))
         "an opted-in function keeps the map call")))
 
+(defn- keys-with-elided
+  "Of the keys `defn-typed` can put on a var (`:malli/schema` `:inline` `:inline-arities`), the ones a
+   definition's var has when the compiler's `:elide-meta` lists `elided`."
+  [elided]
+  (let [ns-sym 'defn-typed.elide-probe]
+    (try
+      (binding [*ns* (create-ns ns-sym)
+                *compiler-options* (assoc *compiler-options* :elide-meta elided)]
+        (eval '(defn-typed.core/defn-typed elided-fn {:request :map} -> :map request)))
+      (set (keys (select-keys (meta (ns-resolve ns-sym 'elided-fn)) [:malli/schema :inline :inline-arities])))
+      (finally (remove-ns ns-sym)))))
+
+(deftest compiler-elide-meta
+  (testing "a key the compiler's :elide-meta lists is not on the var, as for any def's metadata; the others stay"
+    (is (= #{:inline :inline-arities} (keys-with-elided [:malli/schema])))
+    (is (= #{:malli/schema :inline-arities} (keys-with-elided [:inline])))
+    (is (= #{:inline-arities} (keys-with-elided [:malli/schema :inline])))))
+
 (def ^:private probe
   "Run in a fresh JVM. The map fns are replaced, so a call compiled to the positional call still
    answers the body's result. Prints that result, the expander's answer, the metadata of each var."
