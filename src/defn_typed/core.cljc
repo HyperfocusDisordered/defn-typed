@@ -1986,7 +1986,7 @@
       holding these two values is rebuilt value by value in the namespace's `load()`, the one JVM
       method (65535 bytes) an AOT-compiled namespace's forms share. This runs before the next
       form is compiled, so a later call in the namespace is expanded as it would be with both in
-      the defn. A nil out-schema (∨ inline) leaves that key off: the compiler's `:elide-meta` lists
+      the defn. A nil out-schema (or inline) leaves that key off: the compiler's `:elide-meta` lists
       it. Returns v."
      [^clojure.lang.Var v out-schema inline]
      (when out-schema
@@ -2400,9 +2400,9 @@
    [[:int]                                    :int]])
 
 (defn- malli-errors
-  "malli's errors for the ex-data of a :malli.core/invalid-input ∨ :malli.core/invalid-output, each
-   with `:path`, its key path inside the one argument (a function of one argument) ∨ the args
-   (several) ∨ the result, and `:missing?`; nil for any other ex-data."
+  "malli's errors for the ex-data of a :malli.core/invalid-input or :malli.core/invalid-output, each
+   with `:path`, its key path inside the one argument (a function of one argument) or the args
+   (several) or the result, and `:missing?`; nil for any other ex-data."
   [explain {:keys [type data]}]
   (let [[schema value single-arg?]
         (case type
@@ -2417,8 +2417,8 @@
                :missing? (= :malli.core/missing-key (:type error)))))))
 
 (defn malli-reasons
-  "`<key path> · <message> · got <value>` (∨ `· missing`), one line per failing key, for the ex-data
-   of a :malli.core/invalid-input ∨ :malli.core/invalid-output; nil for any other ex-data.
+  "`<key path> · <message> · got <value>` (or `· missing`), one line per failing key, for the ex-data
+   of a :malli.core/invalid-input or :malli.core/invalid-output; nil for any other ex-data.
    defn-typed.core carries no malli: the caller passes {:explain malli.core/explain
    :error-message malli.error/error-message}."
   [{:keys [explain error-message]} ex-data]
@@ -2655,7 +2655,7 @@
 
 #?(:clj
    (defn- invalid-call-text
-     "The message of a malli rejection (ex-data of a :malli.core/invalid-input ∨ -output, with the
+     "The message of a malli rejection (ex-data of a :malli.core/invalid-input or -output, with the
       `:fn-name` malli's instrument! adds under a `:report`): `defn-typed: <fn> — invalid <key path>:
       expected <schema>, got <value>` per failing key (`invalid <key path>: missing required key`;
       the result's path reads `output`), joined by `; `."
