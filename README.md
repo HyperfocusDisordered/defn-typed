@@ -412,9 +412,8 @@ The README's four marked blocks (`order-total` at the top, these two, and `first
 hooks), malli's `collect!`/`instrument!` and any tool that reads a `defn` see a `defn`. The `defn`
 carries constant metadata only: in an ahead-of-time compiled Clojure namespace every top-level
 form runs in one JVM method of at most 65535 bytes, and a typed function adds about 100 bytes to it
-(`defn-typed.load-size-test`), where a metadata map holding the schema and the expander added more than twice
-that. `:arglists` lists the rows, so `(doc name)`
-and editor hovers show the inputs: `([{:keys [price qty discount]}])`. The defaults are the `:or`
+(`defn-typed.load-size-test`). `:arglists` lists the rows, so `(doc name)` and editor hovers show
+the inputs: `([{:keys [price qty discount]}])`. The defaults are the `:or`
 of the destructuring, taken from the rows when the macro expands. A row whose defaults only the
 evaluated schema shows (a symbol as its type, `:frame frame`, or a `[:map …]` row with defaults
 inside) is read at call time. `<name>-props` keeps entry order up to 8 rows (a larger map literal
@@ -702,7 +701,8 @@ production builds.
   drops them. The released bundle has no malli code and no cases, unless the app requires
   `defn-typed.malli-in-prod`.
 - `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword, in the attr-map
-  or in `attach-call-meta!`'s data): nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
+  or in `attach-call-meta!`'s data): nothing it emits loads malli. `test/defn_typed/core_test.clj`
+  `release-form` asserts this.
 
 ## Errors
 
