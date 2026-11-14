@@ -240,17 +240,19 @@
                   (run! remove-ns ns-syms)))))
 
 (deftest release-form
-  (testing "defn-typed expands to (def <name>-props …) + (declare <name>) + the positional defn holding the body + (instrumented-before! '<name>) + a plain clojure.core/defn whose :malli/schema is attr-map data + (keep-instrumented! #'<name>) + (signature! #'<name> …): no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
+  (testing "defn-typed expands to (def <name>-props …) + (declare <name>) + the positional defn holding the body + (instrumented-before! '<name>) + a plain clojure.core/defn whose attr-map holds constants only + (attach-call-meta! #'<name> <out-schema> <expander>), the var's :malli/schema and :inline + (keep-instrumented! #'<name>) + (signature! #'<name> …): no malli symbol, so nothing loads malli until a dev/test loader collects and instruments"
     (let [expansion (macroexpand-1 '(defn-typed.core/defn-typed f {:a :int} -> :int a))]
       (is (= ['do 'def 'clojure.core/declare 'clojure.core/defn 'defn-typed.core/instrumented-before! 'clojure.core/defn
-              'defn-typed.core/keep-instrumented! 'defn-typed.core/signature!]
+              'defn-typed.core/attach-call-meta! 'defn-typed.core/keep-instrumented! 'defn-typed.core/signature!]
              (cons (first expansion) (map first (rest expansion)))))
       (is (= `(quote ~(symbol (str *ns*) "f")) (second (nth expansion 4))))
       (is (= '(var f) (second (nth expansion 6))))
       (is (= '(var f) (second (nth expansion 7))))
+      (is (= '(var f) (second (nth expansion 8))))
       (is (= '(clojure.core/declare f) (nth expansion 2)))
       (is (= '(clojure.core/defn f--positional {:no-doc true} [a] a) (nth expansion 3)))
-      (is (= [:=> [:cat 'f-props] :int] (:malli/schema (nth (nth expansion 5) 2))))
+      (is (= #{:arglists :inline-arities} (set (keys (nth (nth expansion 5) 2)))) "the defn's attr-map: constants")
+      (is (= [:int] (take 1 (drop 2 (nth expansion 6)))) "the output schema, which attach-call-meta! wraps into :malli/schema")
       (is (= [] (malli-symbols expansion)))))
   (testing "a cljs dev build (not :advanced) interns the call-site macro too, and records it as the ns's own :use-macros"
     (with-cljs-compiler :none ['fx1.dev-cljs]

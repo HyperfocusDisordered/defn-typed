@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Clojure: a `defn-typed` function of one map adds about 100 bytes to its namespace's `load()`
+  method, where 0.3.4 added 214 (229 with a `:doc`). An ahead-of-time compiled namespace runs every
+  top-level form in that one JVM method, whose code is at most 65535 bytes; 0.3.4 rebuilt the
+  function's metadata map there value by value, because two of its values, `:malli/schema` and
+  `:inline`, are not compile-time constants. The `defn` now carries constant metadata only, which
+  compiles to one constant as for a plain `defn`, and `defn-typed.core/attach-call-meta!`
+  (internal, called by the expansion, never by hand) puts `:malli/schema` and `:inline` on the var
+  right after it, before the next form is compiled. The var's metadata is the same, key for key and value for value, and a call below the
+  definition is inlined as before, loading from source or from classes compiled ahead of time.
+  The macroexpansion of a clj definition differs: `:malli/schema` is no longer in the `defn`'s
+  attr-map but in the `attach-call-meta!` call that follows it. The ClojureScript expansion is
+  unchanged.
+
 ## 0.3.4 (2026-11-13)
 
 - `defn-typed.kondo`: a row typed by a defn-typed function's `<name>-props` var

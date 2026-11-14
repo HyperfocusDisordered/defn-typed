@@ -399,15 +399,21 @@ The README's four marked blocks (`order-total` at the top, these two, and `first
 (do (def name-props [:map [key schema] …])   ; a defaulted row: [key {:optional true} schema]
     (declare name)                            ; the body may call name
     (defn name--positional [key …] body…)
-    (defn name {:malli/schema [:=> [:cat name-props] out-schema] :doc … :inline …
-                :arglists '([{:keys [key …]}])}
+    (defn name {:doc … :arglists '([{:keys [key …]}])}
       [m]
       (let [{:keys [key …] :or {key default …}} m]
-        (name--positional key …))))
+        (name--positional key …)))
+    ;; Clojure: right after the defn, name's var gets the two metadata values that are not constants
+    (attach-call-meta! #'name out-schema (fn [arg] …))   ; :malli/schema [:=> [:cat name-props] out-schema], :inline
+    …)
 ```
 
-so clj-kondo (with the exported hooks), malli's `collect!`/`instrument!` and any tool that reads
-a `defn` see a `defn`. `:arglists` lists the rows, so `(doc name)`
+(ClojureScript keeps `:malli/schema` in the `defn`'s attr-map.) So clj-kondo (with the exported
+hooks), malli's `collect!`/`instrument!` and any tool that reads a `defn` see a `defn`. The `defn`
+carries constant metadata only: in an ahead-of-time compiled Clojure namespace every top-level
+form runs in one JVM method of at most 65535 bytes, and a typed function adds about 100 bytes to it
+(`defn-typed.load-size-test`), where a metadata map holding the schema and the expander added more than twice
+that. `:arglists` lists the rows, so `(doc name)`
 and editor hovers show the inputs: `([{:keys [price qty discount]}])`. The defaults are the `:or`
 of the destructuring, taken from the rows when the macro expands. A row whose defaults only the
 evaluated schema shows (a symbol as its type, `:frame frame`, or a `[:map …]` row with defaults
@@ -695,8 +701,8 @@ production builds.
   `defmeta`'s registrations (cases, `:meta`, `#'f`) sit under `goog.DEBUG`, so a release build
   drops them. The released bundle has no malli code and no cases, unless the app requires
   `defn-typed.malli-in-prod`.
-- `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword in the attr-map):
-  nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
+- `defn-typed`'s expansion contains no malli symbol (`:malli/schema` is a keyword, in the attr-map
+  or in `attach-call-meta!`'s data): nothing it emits loads malli. `test/defn_typed/core_test.clj` `release-form` asserts this.
 
 ## Errors
 

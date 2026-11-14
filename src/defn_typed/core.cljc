@@ -14,9 +14,10 @@
    `defmeta` (above f) expands to (declare f) + the registration of its cases and keys, and leaves
    its map for the defn-typed below, which puts :doc and the other keys into f's attr-map.
    `defn-typed` turns the input map into [:map …] and expands to (def f-props [:map …]),
-   (defn f--positional [k] ...) and (defn f {:malli/schema [:=> [:cat f-props] :any]
-   :arglists '([{:keys [k]}])} [m] (let [{:keys [k] :or {k 1}} m] (f--positional k))) and, in clj,
-   (instrumented-before! 'f) before that defn and (keep-instrumented! #'f) after it, so a var malli
+   (defn f--positional [k] ...) and (defn f {:arglists '([{:keys [k]}])} [m]
+   (let [{:keys [k] :or {k 1}} m] (f--positional k))) and, in clj, (attach-call-meta! #'f :any …)
+   right after that defn (f's `:malli/schema` and `:inline`; cljs keeps `:malli/schema` in the
+   defn's attr-map), (instrumented-before! 'f) before the defn and (keep-instrumented! #'f) after it, so a var malli
    instrumented stays instrumented when redefined, (signature! #'f \"…\") and, for rows typed by a
    schema var (`:order Order`), (watch-schemas! #'f [#'Order]); every call site goes through
    expand-call, a redefinition with another signature names the namespaces whose calls compiled
@@ -1976,6 +1977,22 @@
            (doseq [text texts] (print-err! text)))))))
 
 #?(:clj
+   (defn attach-call-meta!
+     "Internal: emitted by a clj defn-typed definition right after its defn, never called by hand.
+      Puts on v, the definition's var, the two values of its metadata that are not compile-time
+      constants: `:malli/schema` = `[:=> [:cat <the value of v's <name>-props>] out-schema]` and
+      `:inline` = inline, the call-site expander. The defn itself carries constant metadata only,
+      which the compiler loads as one constant, as it does for a plain defn; a metadata map
+      holding these two values is rebuilt value by value in the namespace's `load()`, the one JVM
+      method (65535 bytes) an AOT-compiled namespace's forms share. This runs before the next
+      form is compiled, so a later call in the namespace is expanded as it would be with both in
+      the defn. Returns v."
+     [^clojure.lang.Var v out-schema inline]
+     (let [props (.getRawRoot (.findInternedVar (.-ns v) (symbol (str (.-sym v) "-props"))))]
+       (alter-meta! v assoc :malli/schema [:=> [:cat props] out-schema] :inline inline))
+     v))
+
+#?(:clj
    (defmacro defn-typed
      "(defn-typed name {key schema …} -> <out-schema> body…): a one-arity function of one map.
       (defn-typed name [T …] {key schema …} -> <out-schema> body…): the same with type variables:
@@ -1988,9 +2005,13 @@
       The body sees every row key as a local of the same name (`:line-h` → `line-h`), defaults
       filled. Expands to `(def <name>-props [:map …])`,
       `(defn <name>--positional [k…] body…)` (the rows in entry order) and
-      `(defn name {:malli/schema [:=> [:cat <name>-props] <out-schema>] :arglists '([{:keys [k…]}])} [m]
+      `(defn name {:arglists '([{:keys [k…]}])} [m]
       (let [{:keys [k…] :or {k default}} m] (<name>--positional k…)))`, so everything that reads defn
-      and :malli/schema sees a plain defn, and doc shows the rows as its arglist; clj then calls
+      sees a plain defn, and doc shows the rows as its arglist. The var's `:malli/schema`
+      `[:=> [:cat <name>-props] <out-schema>]` is in that attr-map in cljs; clj leaves the defn
+      with constant metadata (the size of a plain defn in an AOT-compiled namespace's `load()`) and
+      attaches `:malli/schema` and the call-site expander `:inline` right after it
+      (attach-call-meta!). clj then calls
       `(signature! #'name \"<signature>\")`, which reloads the callers compiled against another one,
       around the defn `(instrumented-before! 'name)` / `(keep-instrumented! #'name)`, which instrument
       the new fn when malli had instrumented the one it replaces,
@@ -2102,15 +2123,22 @@
                      (assoc :positional (qualified &env positional)))
               ;; the map's rows as a destructuring arglist, so doc and editors show the inputs, not m
               arglists (list 'quote (list [{:keys (mapv :binding rows)}]))
-              attrs (cond-> (merge {:arglists arglists} meta-keys {:malli/schema [:=> [:cat props] out-schema]})
-                      (not cljs?) (assoc :inline-arities #{1}
-                                         ;; the fallback is a host call on the var's value: no op
-                                         ;; position, so it is never expanded again
-                                         :inline (plumbing
-                                                  `(fn [arg#]
-                                                     (expand-call {:spec '~spec :arg arg# :cljs? false
-                                                                   :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
-                                                                   :file *file* :line (deref clojure.lang.Compiler/LINE)})))))]
+              ;; clj: constants only (the compiler loads them as one constant, the size of a plain
+              ;; defn's), the rest is attached right after the defn (attach-call-meta!)
+              attrs (if cljs?
+                      (merge {:arglists arglists} meta-keys {:malli/schema [:=> [:cat props] out-schema]})
+                      (assoc (merge {:arglists arglists} meta-keys) :inline-arities #{1}))
+              attach-call (when-not cljs?
+                            [(plumbing
+                              `(attach-call-meta!
+                                (var ~fn-name)
+                                ~out-schema
+                                ;; the fallback is a host call on the var's value: no op
+                                ;; position, so it is never expanded again
+                                (fn [arg#]
+                                  (expand-call {:spec '~spec :arg arg# :cljs? false
+                                                :fallback (list '.invoke (with-meta '~q {:tag 'clojure.lang.IFn}) arg#)
+                                                :file *file* :line (deref clojure.lang.Compiler/LINE)}))))])]
           (swap! pending-meta dissoc q)
           ;; literal calls compiled before this definition are map calls, reported under
           ;; :literal-check: clj from a `declare` (a plain one, or the defmeta's; the var had no
@@ -2183,6 +2211,7 @@
                              ~@(when key-check [key-check])
                              ~call)
                     positional? plumbing)
+                 ~@attach-call
                  ~@schema-check-call
                  ~@collect-private-call
                  ~@keep-instrumented-call
@@ -2212,6 +2241,7 @@
                           (let [~result ~(if positional? call `(~body-fn ~m))]
                             (when ~check? (malli-check! ~checker :output ~result))
                             ~result))))
+                   ~@attach-call
                    ~@schema-check-call
                    ~@collect-private-call
                    ~@keep-instrumented-call
