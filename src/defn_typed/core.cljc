@@ -1989,7 +1989,9 @@
       the defn. Returns v."
      [^clojure.lang.Var v out-schema inline]
      (let [props (.getRawRoot (.findInternedVar (.-ns v) (symbol (str (.-sym v) "-props"))))]
-       (alter-meta! v assoc :malli/schema [:=> [:cat props] out-schema] :inline inline))
+       ;; the expander fn carries the mark `plumbing` puts on a form, at no cost in `load()`
+       (alter-meta! v assoc :malli/schema [:=> [:cat props] out-schema]
+                    :inline (with-meta inline {:typed.clojure/ignore true})))
      v))
 
 #?(:clj

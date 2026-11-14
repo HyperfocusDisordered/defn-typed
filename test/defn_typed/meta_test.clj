@@ -10,6 +10,10 @@
 
 (def order '[plain by-var documented hidden guarded])
 
+(def inline-meta
+  "The metadata of the `:inline` fn: 0.3.4 marked it for Typed Clojure to skip."
+  {:typed.clojure/ignore true})
+
 (def pinned
   "name → every key of the var's metadata but `:inline` (a fn, tested by what it returns) and `:ns`."
   (let [common {:column 1 :file "defn_typed/meta_fixture.clj" :inline-arities #{1}}]
@@ -35,7 +39,8 @@
     (testing (str sym)
       (is (= (pinned sym) (dissoc (meta v) :inline :ns)))
       (is (= (the-ns 'defn-typed.meta-fixture) (:ns (meta v))))
-      (is (fn? (:inline (meta v)))))))
+      (is (fn? (:inline (meta v))))
+      (is (= inline-meta (meta (:inline (meta v))))))))
 
 (deftest call-site-expander
   (with-redefs [core/inline-on? (constantly true)]
@@ -51,19 +56,21 @@
        "  (alter-var-root v (constantly (fn [m] :map-call))))"
        "(prn (defn-typed.meta-fixture/caller))"
        "(prn ((:inline (meta #'defn-typed.meta-fixture/plain)) '{:request {}}))"
+       "(prn (meta (:inline (meta #'defn-typed.meta-fixture/plain))))"
        "(doseq [s '" (pr-str order) "]"
        "  (prn (dissoc (meta (ns-resolve 'defn-typed.meta-fixture s)) :inline :ns)))"))
 
 (defn- probe-reads
-  "[caller-result expander-answer & metadata] printed by the probe on classpath cp."
+  "[caller-result expander-answer expander-metadata & metadata] printed by the probe on classpath cp."
   [cp]
   (let [reader (java.io.PushbackReader. (java.io.StringReader. (aot/java-eval cp probe)))]
     (take-while #(not= ::eof %) (repeatedly #(edn/read {:eof ::eof} reader)))))
 
 (defn- check-probe [reads]
-  (let [[called expander & metas] reads]
+  (let [[called expander expander-meta & metas] reads]
     (is (= [{:a 1} 5] called) "the call after the definition is the positional call: the replaced var is not reached")
     (is (= '(defn-typed.meta-fixture/plain--positional {}) expander))
+    (is (= inline-meta expander-meta))
     (is (= (map pinned order) metas))))
 
 (deftest loaded-in-a-fresh-process
