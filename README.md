@@ -411,8 +411,9 @@ The README's four marked blocks (`order-total` at the top, these two, and `first
 (ClojureScript keeps `:malli/schema` in the `defn`'s attr-map.) So clj-kondo (with the exported
 hooks), malli's `collect!`/`instrument!` and any tool that reads a `defn` see a `defn`. The `defn`
 carries constant metadata only: in an ahead-of-time compiled Clojure namespace every top-level
-form runs in one JVM method of at most 65535 bytes, and a typed function adds about 100 bytes to it
-(`defn-typed.load-size-test`). `:arglists` lists the rows, so `(doc name)` and editor hovers show
+form runs in one JVM method of at most 65535 bytes, and a typed function adds 108 bytes to it
+(with a `defmeta` above it, 13 are the `defmeta`'s `declare` and the `defn-typed` form adds 95;
+`defn-typed.load-size-test`). `:arglists` lists the rows, so `(doc name)` and editor hovers show
 the inputs: `([{:keys [price qty discount]}])`. The defaults are the `:or`
 of the destructuring, taken from the rows when the macro expands. A row whose defaults only the
 evaluated schema shows (a symbol as its type, `:frame frame`, or a `[:map …]` row with defaults
@@ -869,6 +870,9 @@ clojure -M:cljs release inline && node out/inline-tests.js   # cljs release, swi
 clojure -M:typed                                    # Typed Clojure bridge (test-typed/)
 clj-kondo --lint src test                            # uses the exported hooks
 ```
+
+The clj tests start child JVMs (a namespace compiled ahead of time, then loaded in a fresh process)
+and read class files with `javap`: a JDK's `java` and `javap` on `PATH`.
 
 ## Contributing / upstream
 
