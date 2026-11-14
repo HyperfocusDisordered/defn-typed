@@ -254,6 +254,19 @@
       (is (= #{:arglists :inline-arities} (set (keys (nth (nth expansion 5) 2)))) "the defn's attr-map: constants")
       (is (= [:int] (take 1 (drop 2 (nth expansion 6)))) "the output schema, which attach-call-meta! wraps into :malli/schema")
       (is (= [] (malli-symbols expansion)))))
+  (testing "a name already declared and not defined (a defmeta's declare, or a plain one) gets no second declare; a defined name does"
+    (let [ns-sym 'defn-typed.declare-probe
+          declares? (fn [] (binding [*ns* (create-ns ns-sym)]
+                             (boolean (some #{'(clojure.core/declare g)}
+                                            (macroexpand-1 '(defn-typed.core/defn-typed g {:a :int} -> :int a))))))
+          in-probe (fn [form] (binding [*ns* (the-ns ns-sym)] (eval form)))]
+      (try
+        (is (true? (declares?)))
+        (in-probe '(clojure.core/declare g))
+        (is (false? (declares?)))
+        (in-probe '(clojure.core/defn g [m] m))
+        (is (true? (declares?)) "a reload: the declare clears the old definition's metadata, :inline included")
+        (finally (remove-ns ns-sym)))))
   (testing "a cljs dev build (not :advanced) interns the call-site macro too, and records it as the ns's own :use-macros"
     (with-cljs-compiler :none ['fx1.dev-cljs]
       (fn [compiler]

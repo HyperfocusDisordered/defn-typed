@@ -14,6 +14,10 @@
   The macroexpansion of a clj definition differs: `:malli/schema` is no longer in the `defn`'s
   attr-map but in the `attach-call-meta!` call that follows it. The ClojureScript expansion is
   unchanged.
+- Clojure: where a `defmeta` or a `declare` has just declared the name, the expansion leaves out
+  its own `(declare name)` (13 bytes of `load()`): the var is in the state that declare would leave
+  it. A reload of a defined name still declares it first, which clears the old definition's
+  `:inline` before the body compiles.
 
 ## 0.3.4 (2026-11-13)
 

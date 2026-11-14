@@ -2011,7 +2011,8 @@
       `[:=> [:cat <name>-props] <out-schema>]` is in that attr-map in cljs; clj leaves the defn
       with constant metadata (the size of a plain defn in an AOT-compiled namespace's `load()`) and
       attaches `:malli/schema` and the call-site expander `:inline` right after it
-      (attach-call-meta!). clj then calls
+      (attach-call-meta!). The `(declare name)` before the body is left out where a defmeta (or a
+      `declare`) just declared name. clj then calls
       `(signature! #'name \"<signature>\")`, which reloads the callers compiled against another one,
       around the defn `(instrumented-before! 'name)` / `(keep-instrumented! #'name)`, which instrument
       the new fn when malli had instrumented the one it replaces,
@@ -2165,6 +2166,9 @@
             (install-cljs-expander! &env fn-name spec))
           (let [call (if positional? `(let ~bindings (~positional ~@locals)) `(let ~bindings ~@(with-conditions body)))
                 body-defn (when positional? `(defn ~(def-name positional) {:no-doc true} ~locals ~@body))
+                ;; clj: a var already declared and not defined (the defmeta's declare, or a plain one,
+                ;; ran just above: var meta `:declared`) is in the state this declare would leave it
+                declare-call (when-not (and (not cljs?) (declared-line fn-name)) [`(declare ~fn-name)])
                 ;; clj: after the defn, callers compiled against another signature are stale (cljs:
                 ;; shadow-cljs recompiles the namespaces that depend on a changed one)
                 ;; clj: the schema vars the rows refer to — their values are part of the signature,
@@ -2204,7 +2208,7 @@
               `(do
                  ~(plumbing `(def ~(def-name props) ~props-form))
                  ;; the body calls name before its defn: a recursive call, name passed as a value
-                 ~@(when positional? [`(declare ~fn-name) body-defn])
+                 ~@(when positional? (concat declare-call [body-defn]))
                  ~@instrumented-before-call
                  ;; positional: name only binds the rows and calls the body; else the body is here
                  ~(cond-> `(defn ~fn-name ~attrs [~m]
@@ -2229,7 +2233,7 @@
                    ~(plumbing `(def ~(def-name props) ~props-form))
                    ~(plumbing `(def ~(vary-meta (def-name slot) assoc :no-doc true)
                                  (malli-in-prod-slot {:fn '~q :input ~props :output ~out-schema :opts '~malli-opts})))
-                   (declare ~fn-name)
+                   ~@declare-call
                    ~(or body-defn `(defn ~(def-name body-fn) {:no-doc true} [~m] ~call))
                    ~@instrumented-before-call
                    ~(plumbing

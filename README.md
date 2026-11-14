@@ -397,7 +397,7 @@ The README's four marked blocks (`order-total` at the top, these two, and `first
 
 ```clojure
 (do (def name-props [:map [key schema] …])   ; a defaulted row: [key {:optional true} schema]
-    (declare name)                            ; the body may call name
+    (declare name)                            ; the body may call name; omitted where name is declared already
     (defn name--positional [key …] body…)
     (defn name {:doc … :arglists '([{:keys [key …]}])}
       [m]
