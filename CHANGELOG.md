@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `defn-typed.kondo` resolves schema references qualified by a required namespace or its alias,
+  including references nested in schemas and aliases from split namespace files. Schema-only source
+  files are included; an unreadable unrelated file is skipped, while an unreadable typed file reports its path.
+
 ## 0.3.5 (2026-11-14)
 
 - Clojure: a `defn-typed` function of one map adds 108 bytes to its namespace's `load()` method,

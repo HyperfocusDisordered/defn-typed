@@ -180,8 +180,8 @@ line `OK 42 fns → .clj-kondo/imports/defn-typed/types/config.edn` goes to stde
 empty.
 
 clj-kondo loads a config under `.clj-kondo/imports/` with no further setting; another path needs
-`:config-paths`. In a schema, a symbol naming a top-level `def` of the same namespace (or of the
-namespace it is `:refer`red from), a defn-typed function's `<name>-props` included, stands for that
+`:config-paths`. In a schema, a symbol naming a top-level `def` of the same namespace, a namespace
+it is `:refer`red from, or a required namespace qualified by name or alias, a defn-typed function's `<name>-props` included, stands for that
 def's value, and `[:fn …]` for `:any`. The output is canonical (every map sorted by key) and the
 file is written only when its text changes, so the same sources leave it, and its git diff, alone;
 `:written? false` says so. malli's global function-schema registry is not touched, so a REPL's own

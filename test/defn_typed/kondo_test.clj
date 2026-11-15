@@ -51,7 +51,7 @@
                (get-in config [:linters :type-mismatch :namespaces (ns-name ns) name :arities 1]))
             (str (symbol v)))))))
 
-(deftest nested-aliased-schema-references
+(deftest qualified-schema-references
   (let [dir (temp-dir)
         out (str (io/file dir "config.edn"))]
     (spit (io/file dir "other.clj")
@@ -62,7 +62,10 @@
     (is (= (kondo/config-text [{:ns 'example.caller :name 'example
                                 :schema [:=> [:cat [:map [:one [:maybe [:map [:id :int]]]]
                                                      [:many [:vector [:map [:id :int]]]]]] :int]}])
-           (slurp out)))))
+           (slurp out)))
+    (is (= 'unknown/clause
+           (kondo/resolved-schema {:defs {nil {'clause :int}} :refers {} :ns-sym 'example.caller
+                                   :schema 'unknown/clause})))))
 
 (deftest split-namespace-aliases-survive-either-file-order
   (let [dir (temp-dir)

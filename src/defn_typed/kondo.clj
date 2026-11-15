@@ -106,7 +106,7 @@
                    (and (vector? x) (= :fn (first x))) :any
                    (and (symbol? x) (contains? own x))
                    (resolved-schema {:defs defs :refers refers :ns-sym ns-sym :schema (get own x)})
-                   (and (symbol? x) (contains? (get defs home) var-name))
+                   (and (symbol? x) home (contains? (get defs home) var-name))
                    (resolved-schema {:defs defs :refers refers :ns-sym home :schema (get-in defs [home var-name])})
                    :else x)))
              schema)))
