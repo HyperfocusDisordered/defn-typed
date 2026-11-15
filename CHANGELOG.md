@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.6 (2026-11-16)
 
 - `defn-typed.kondo` resolves schema references qualified by a required namespace or its alias,
   including references nested in schemas and aliases from split namespace files. Schema-only source
