@@ -64,6 +64,19 @@
                                                      [:many [:vector [:map [:id :int]]]]]] :int]}])
            (slurp out)))))
 
+(deftest split-namespace-aliases-survive-either-file-order
+  (let [dir (temp-dir)
+        schema (io/file dir "schema.clj")
+        caller (io/file dir "x.clj")
+        companion (io/file dir "x.cljs")
+        out (str (io/file dir "config.edn"))]
+    (spit schema "(ns example.schema) (def clause :int)")
+    (spit caller "(ns example.x (:require [example.schema :as other] [defn-typed.core :refer [defn-typed]])) (defn-typed f {:x [:vector other/clause]} -> :int 1)")
+    (spit companion "(ns example.x)")
+    (doseq [files [[schema caller companion] [schema companion caller]]]
+      (with-redefs [clojure.core/file-seq (fn [_] files)]
+        (is (= 1 (:fns (kondo/emit! {:src-dirs [(str dir)] :out out}))))))))
+
 (deftest metadata-on-the-input-map-becomes-its-props
   (testing "^{:as row} (0.3.1 forms, a compile error since): typed from its rows, no throw"
     (let [dir (temp-dir)

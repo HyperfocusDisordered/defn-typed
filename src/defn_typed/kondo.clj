@@ -76,18 +76,20 @@
                                 [(second form) (last form)])))})))
 
 (defn referred-namespaces
-  "`{ns-sym {sym home-ns}}`: every symbol a ns form `:refer`s by name (`[home :refer [sym …]]`)."
+  "`{ns-sym {sym home-ns, [qualifier] home-ns}}` for referred names and required qualifiers."
   [parsed]
   (apply merge-with merge
          (for [[ns-sym [ns-form]] parsed]
-           {ns-sym (into {} (for [clause (rest ns-form)
-                                  :when (and (seq? clause) (= :require (first clause)))
-                                  spec (rest clause)
-                                  :when (and (vector? spec) (even? (count (rest spec))))
-                                  :let [refer (:refer (apply hash-map (rest spec)))]
-                                  :when (sequential? refer)
-                                  sym refer]
-                              [sym (first spec)]))})))
+           {ns-sym (into {} (mapcat (fn [spec]
+                                      (let [home (first spec)
+                                            {:keys [refer as]} (apply hash-map (rest spec))]
+                                        (concat (map #(vector % home) (when (sequential? refer) refer))
+                                                (map #(vector [%] home) (remove nil? [home as])))))
+                                    (for [clause (rest ns-form)
+                                          :when (and (seq? clause) (= :require (first clause)))
+                                          spec (rest clause)
+                                          :when (and (vector? spec) (even? (count (rest spec))))]
+                                      spec)))})))
 
 (defn resolved-schema
   "schema of ns-sym with every symbol naming a def (schema-defs) of its own ns, a referred ns,
@@ -97,7 +99,8 @@
   [{:keys [defs refers ns-sym schema]}]
   (let [own (get defs ns-sym)]
     (prewalk (fn [x]
-               (let [home (get-in refers [ns-sym x])
+               (let [home (get-in refers [ns-sym (if (and (symbol? x) (namespace x))
+                                                    [(symbol (namespace x))] x)])
                      var-name (if (and (symbol? x) (namespace x)) (symbol (name x)) x)]
                  (cond
                    (and (vector? x) (= :fn (first x))) :any
@@ -139,17 +142,7 @@
                      :when (and (.isFile source) (re-find #"\.clj[sc]?$" (.getName source)))]
                  (conj (read-source source) (.getPath source)))
         defs (schema-defs parsed)
-        refers (merge-with merge (referred-namespaces parsed)
-                           (into {} (for [[ns-sym [ns-form]] parsed]
-                                      [ns-sym (into {} (for [clause (rest ns-form)
-                                                             :when (and (seq? clause) (= :require (first clause)))
-                                                             spec (rest clause)
-                                                             :when (and (vector? spec) (even? (count (rest spec))))
-                                                             :let [home (first spec)
-                                                                   alias (:as (apply hash-map (rest spec)))]
-                                                             var (keys (get defs home))
-                                                             qualifier (remove nil? [home alias])]
-                                                         [(symbol (str qualifier) (name var)) home]))])))]
+        refers (referred-namespaces parsed)]
     (vec (for [[ns-sym forms path] parsed
                form forms
                :let [typed? (typed-form? form)
