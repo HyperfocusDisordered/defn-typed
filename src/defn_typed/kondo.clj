@@ -139,8 +139,15 @@
   [src-dirs]
   (let [parsed (for [src-dir src-dirs
                      source (file-seq (file src-dir))
-                     :when (and (.isFile source) (re-find #"\.clj[sc]?$" (.getName source)))]
-                 (conj (read-source source) (.getPath source)))
+                     :when (and (.isFile source) (re-find #"\.clj[sc]?$" (.getName source)))
+                     :let [parsed-source (try (conj (read-source source) (.getPath source))
+                                              (catch Exception e
+                                                (let [text (slurp source)]
+                                                  (when (or (.contains text ":malli/schema") (.contains text "defn-typed"))
+                                                    (throw (ex-info (str "Cannot read " (.getPath source))
+                                                                    {:file (.getPath source)} e))))))]
+                     :when parsed-source]
+                 parsed-source)
         defs (schema-defs parsed)
         refers (referred-namespaces parsed)]
     (vec (for [[ns-sym forms path] parsed
