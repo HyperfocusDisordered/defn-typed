@@ -90,20 +90,21 @@
                               [sym (first spec)]))})))
 
 (defn resolved-schema
-  "schema of ns-sym with every symbol naming a def (schema-defs) of its own ns, else a def of the ns it is
-   `:refer`red from, replaced by that def's value (resolved the same way, at any depth), and every
+  "schema of ns-sym with every symbol naming a def (schema-defs) of its own ns, a referred ns,
+   or a required ns (qualified by name or alias), replaced by that def's value at any depth, and every
    `[:fn …]` replaced by `:any`: a cljs predicate cannot run on the JVM, and clj-kondo types `:fn`
    as `:any` anyway. Any other symbol stays (malli's predicate names: `string?`, `pos-int?` …)."
   [{:keys [defs refers ns-sym schema]}]
   (let [own (get defs ns-sym)]
     (prewalk (fn [x]
-               (let [home (get-in refers [ns-sym x])]
+               (let [home (get-in refers [ns-sym x])
+                     var-name (if (and (symbol? x) (namespace x)) (symbol (name x)) x)]
                  (cond
                    (and (vector? x) (= :fn (first x))) :any
                    (and (symbol? x) (contains? own x))
                    (resolved-schema {:defs defs :refers refers :ns-sym ns-sym :schema (get own x)})
-                   (and (symbol? x) (contains? (get defs home) x))
-                   (resolved-schema {:defs defs :refers refers :ns-sym home :schema (get-in defs [home x])})
+                   (and (symbol? x) (contains? (get defs home) var-name))
+                   (resolved-schema {:defs defs :refers refers :ns-sym home :schema (get-in defs [home var-name])})
                    :else x)))
              schema)))
 
@@ -127,7 +128,7 @@
 
 (defn function-entries
   "{:ns :name :schema :file} of every typed function under src-dirs, in file-seq order: each
-   .clj/.cljs/.cljc file mentioning `:malli/schema` or `defn-typed`, each top-level defn-typed /
+   .clj/.cljs/.cljc file, each top-level defn-typed /
    defnt form (typed-form-schema) and each defn / defn- with a `:malli/schema` (plain-defn-schema),
    its schema resolved (resolved-schema); a defn-typed input then marked by defaults-optional
    again, which reaches the defaults a resolved symbol brought in, as the macro's
@@ -135,11 +136,20 @@
   [src-dirs]
   (let [parsed (for [src-dir src-dirs
                      source (file-seq (file src-dir))
-                     :when (and (.isFile source) (re-find #"\.clj[sc]?$" (.getName source))
-                                (let [text (slurp source)] (or (.contains text ":malli/schema") (.contains text "defn-typed"))))]
+                     :when (and (.isFile source) (re-find #"\.clj[sc]?$" (.getName source)))]
                  (conj (read-source source) (.getPath source)))
         defs (schema-defs parsed)
-        refers (referred-namespaces parsed)]
+        refers (merge-with merge (referred-namespaces parsed)
+                           (into {} (for [[ns-sym [ns-form]] parsed]
+                                      [ns-sym (into {} (for [clause (rest ns-form)
+                                                             :when (and (seq? clause) (= :require (first clause)))
+                                                             spec (rest clause)
+                                                             :when (and (vector? spec) (even? (count (rest spec))))
+                                                             :let [home (first spec)
+                                                                   alias (:as (apply hash-map (rest spec)))]
+                                                             var (keys (get defs home))
+                                                             qualifier (remove nil? [home alias])]
+                                                         [(symbol (str qualifier) (name var)) home]))])))]
     (vec (for [[ns-sym forms path] parsed
                form forms
                :let [typed? (typed-form? form)
@@ -159,7 +169,7 @@
    defaulted rows optional) and each plain defn / defn- carrying `:malli/schema`, read from the
    source (function-entries) — a .cljs file through its :cljs reader branches, a .clj / .cljc file
    through its :clj ones. In a schema, a symbol naming a top-level def of the same ns (or of the ns
-   it is `:refer`red from), a defn-typed function's `<name>-props` included, stands for that def's
+   it is referred from or names via its require or alias), a defn-typed function's `<name>-props` included, stands for that def's
    value, and `[:fn …]` for `:any` (resolved-schema); metadata on a defn-typed input map becomes the map's props
    (typed-form-schema). malli.clj-kondo turns the signatures into config; every map prints sorted
    by key (config-text), so the same sources give the same text, and out is written only when

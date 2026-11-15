@@ -51,6 +51,19 @@
                (get-in config [:linters :type-mismatch :namespaces (ns-name ns) name :arities 1]))
             (str (symbol v)))))))
 
+(deftest nested-aliased-schema-references
+  (let [dir (temp-dir)
+        out (str (io/file dir "config.edn"))]
+    (spit (io/file dir "other.clj")
+          "(ns example.other)\n(def clause [:map [:id :int]])\n")
+    (spit (io/file dir "caller.clj")
+          "(ns example.caller (:require [example.other :as other] [defn-typed.core :refer [defn-typed]]))\n(defn-typed example {:one [:maybe other/clause] :many [:vector other/clause]} -> :int 1)\n")
+    (kondo/emit! {:src-dirs [(str dir)] :out out})
+    (is (= (kondo/config-text [{:ns 'example.caller :name 'example
+                                :schema [:=> [:cat [:map [:one [:maybe [:map [:id :int]]]]
+                                                     [:many [:vector [:map [:id :int]]]]]] :int]}])
+           (slurp out)))))
+
 (deftest metadata-on-the-input-map-becomes-its-props
   (testing "^{:as row} (0.3.1 forms, a compile error since): typed from its rows, no throw"
     (let [dir (temp-dir)
